@@ -3,3 +3,9 @@ __pycache__/
 *.pyo
 .state.json
 *.db
+
+
+# Backend
+backend/.env
+.test.py
+.llm_call_log.log
