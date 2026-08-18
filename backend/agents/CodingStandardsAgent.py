@@ -189,37 +189,83 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _repair_json(text: str) -> str:
-    """Fix common JSON issues from LLM output: unescaped newlines, truncation."""
-    import re
-
-    def fix_string(m):
-        s = m.group(0)
-        s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-        return s
-
-    result = re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, text)
-
-    result = result.rstrip()
-    if result.endswith(","):
-        result = result[:-1]
-
+    """Fix common JSON issues from LLM output: unescaped quotes, newlines, truncation."""
+    result = []
     in_string = False
-    for ch in result:
+    escaped = False
+    i = 0
+
+    while i < len(text):
+        ch = text[i]
+
+        if escaped:
+            result.append(ch)
+            escaped = False
+            i += 1
+            continue
+
+        if ch == '\\' and in_string:
+            result.append(ch)
+            escaped = True
+            i += 1
+            continue
+
         if ch == '"':
-            in_string = not in_string
+            if not in_string:
+                in_string = True
+                result.append(ch)
+            else:
+                next_idx = i + 1
+                while next_idx < len(text) and text[next_idx] in ' \t\n\r':
+                    next_idx += 1
+                next_ch = text[next_idx] if next_idx < len(text) else ''
+
+                if next_ch in (',', ']', '}', ':', ''):
+                    in_string = False
+                    result.append(ch)
+                elif next_ch == '"' and next_idx + 1 < len(text) and text[next_idx + 1] == '"':
+                    result.append('\\"')
+                else:
+                    result.append('\\"')
+            i += 1
+            continue
+
+        if in_string and ch == '\n':
+            result.append('\\n')
+            i += 1
+            continue
+
+        if in_string and ch == '\r':
+            result.append('\\r')
+            i += 1
+            continue
+
+        if in_string and ch == '\t':
+            result.append('\\t')
+            i += 1
+            continue
+
+        result.append(ch)
+        i += 1
+
+    repaired = ''.join(result)
 
     if in_string:
-        result += '"'
+        repaired += '"'
 
-    open_brackets = result.count("[") - result.count("]")
-    open_braces = result.count("{") - result.count("}")
+    repaired = repaired.rstrip()
+    if repaired.endswith(","):
+        repaired = repaired[:-1]
+
+    open_brackets = repaired.count("[") - repaired.count("]")
+    open_braces = repaired.count("{") - repaired.count("}")
 
     if open_braces > 0:
-        result += "}" * open_braces
+        repaired += "}" * open_braces
     if open_brackets > 0:
-        result += "]" * open_brackets
+        repaired += "]" * open_brackets
 
-    return result
+    return repaired
 
 
 def run_coding_standards_agent(
