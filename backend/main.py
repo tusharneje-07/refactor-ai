@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+from dotenv import load_dotenv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,10 @@ from pydantic import BaseModel
 
 from modules.sqlite_io import SQLiteDB
 from modules.file_io import read_file_content
+from agents.CodingStandardsAgent import run_coding_standards_agent
+from open_keypool import KeyPool
+
+load_dotenv()
 
 app = FastAPI(title="RefactorAI")
 
@@ -18,7 +23,6 @@ CENTRAL_DB_PATH = BASE_DIR / "data" / ".airefactor_central.db"
 STATE_FILE = BASE_DIR / ".state.json"
 
 EXTENSIONS_TO_EXCLUDE = {".pyc", ".pyo", ".pyd", ".so", ".dll", ".exe", ".bin"}
-
 
 def _ensure_central_db():
     db = SQLiteDB(str(CENTRAL_DB_PATH))
@@ -415,6 +419,126 @@ def dev_flush_data():
     db = SQLiteDB(str(CENTRAL_DB_PATH))
     db.runQuery("DELETE FROM projects")
     return {"status": "ok", "message": "All data flushed from central DB"}
+
+
+class CodingStandardsRequest(BaseModel):
+    project_id: str
+    filename: str
+
+
+class CodingStandardsResponse(BaseModel):
+    success: bool
+    agent: str
+    suggestions: Optional[list[dict]] = None
+    model: str
+    error: Optional[dict] = None
+
+
+@app.post(
+    "/_dev-coding-standards-agent",
+    summary="Run coding standards agent on a file",
+    description=(
+        "Reads project info from `.state.json`, loads the specified file "
+        "using `file_io.read_file_content`, and runs the CodingStandardsAgent "
+        "to get style/maintainability suggestions. **For development/testing only.**"
+    ),
+    # response_model=CodingStandardsResponse,
+    status_code=200,
+    responses={
+        400: {"description": "No active project or file not found"},
+        500: {"description": "Agent execution error"},
+    },
+)
+def dev_coding_standards_agent(req: CodingStandardsRequest):
+    if not STATE_FILE.is_file():
+        raise HTTPException(status_code=400, detail="No active project. Call /open-project first.")
+
+    with open(STATE_FILE, "r") as f:
+        state = json.load(f)
+
+    project_path = state["project_path"]
+    file_path = os.path.join(project_path, req.filename)
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=400, detail="File not found in project")
+
+    try:
+        file_content = read_file_content(file_path)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read file")
+
+    code_file = {
+        "filename": req.filename,
+        "total_lines": file_content["total_lines"],
+        "lines": file_content["lines"],
+    }
+
+    project_context = {
+        "project_name": state["project_name"],
+    }
+
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    if os.path.isfile(local_db_path):
+        local_db = SQLiteDB(local_db_path)
+        err, rows = local_db.read(
+            "project_info",
+            "SELECT project_context FROM {table} WHERE project_id = ?",
+            params=(state["project_id"],),
+        )
+        if not err and rows and rows[0].get("project_context"):
+            try:
+                project_context = json.loads(rows[0]["project_context"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    
+    result = run_coding_standards_agent(
+        prompt="Review this file for coding standards issues.",
+        project_context=project_context,
+        git_context={},
+        code_file=code_file,
+        api_key=str(os.getenv("GROQ_API_KEY")),
+    )
+    err_type = (result.get("error") or {}).get("type", "")
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "agent": result["agent"],
+            "suggestions": result.get("suggestions", []),
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    elif err_type == "AuthenticationError":
+        return {
+            "success": False,
+            "agent": result["agent"],
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    elif err_type == "APIStatusError" and "429" in (result.get("error") or {}).get("message", ""):
+        return {
+            "success": False,
+            "agent": result["agent"],
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    else:
+        return {
+            "success": False,
+            "error" : {
+                "Internal Server Error": result.get("error", {}).get("message", "Unknown error occurred")
+            }
+        }
+
 
 
 if __name__ == "__main__":
