@@ -1,0 +1,16 @@
+{
+    "CodingStandardsAgent":{
+        "agent_name": "CodingStandardsAgent",
+        "description": "This agent is responsible for ensuring that the code adheres to established coding standards and best practices. It reviews code for style, formatting, and consistency, and provides feedback to developers to improve code quality.",
+        "capabilities": [
+            "Code Review",
+            "Style and Formatting Checks",
+            "Best Practices Enforcement",
+            "Feedback Generation"
+        ],
+        "agent_id": "coding-standards-agent-01",
+        "version": "1.0.0",
+        "provider": "groq",
+        "use_model" : "openai/gpt-oss-120b"
+    }
+}
