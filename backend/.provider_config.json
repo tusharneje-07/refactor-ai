@@ -1,0 +1,14 @@
+{
+    "opencode-go":{
+        "name": "opencode-go",
+        "endpoint": "https://opencode.ai/zen/go/v1"
+    },
+    "opencode-zen":{
+        "name": "opencode-zen",
+        "endpoint": "https://opencode.ai/zen/v1"
+    },
+    "groq":{
+        "name": "groq",
+        "endpoint": "https://api.groq.com/openai/v1"
+    }
+}
