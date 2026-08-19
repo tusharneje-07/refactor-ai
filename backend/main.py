@@ -123,7 +123,7 @@ class OpenProjectResponse(BaseModel):
 
 
 @app.post(
-    "/open-project",
+    "/open_project",
     summary="Open or register a project",
     description=(
         "Opens an existing project or registers a new one. "
@@ -262,7 +262,7 @@ class ReadFileResponse(BaseModel):
 
 
 @app.post(
-    "/read-file",
+    "/read_file",
     summary="Read a file from the active project",
     description=(
         "Returns the contents of a file inside the currently active project "
@@ -317,7 +317,7 @@ class ValidateProjectPathResponse(BaseModel):
 
 
 @app.post(
-    "/validate-project-path",
+    "/validate_project_path",
     summary="Check if a folder path is a registered project or exists on disk",
     description=(
         "Checks whether the given folder path is already registered in the central "
@@ -676,7 +676,7 @@ class CodingStandardsResponse(BaseModel):
 
 # DEV/TEST MODEL/ENDPOINTS (not for final use)
 @app.post(
-    "/_dev-coding-standards-agent",
+    "/_dev_coding_standards_agent",
     summary="Run coding standards agent on a file",
     description=(
         "Reads project info from `.state.json`, loads the specified file "
@@ -721,7 +721,7 @@ def refactor(req: RefactorRequest):
 
 # (/_dev_flush-data) DEV/TEST MODEL/ENDPOINTS (not for final use)
 @app.post(
-    "/_dev_flush-data",
+    "/_dev_flush_data",
     summary="Flush all data from the central database",
     description=(
         "Drops and recreates every table in `.airefactor_central.db`, "
@@ -814,262 +814,6 @@ def update_suggestions(project_path: str, agent_id: str, suggestions: list[dict]
                 s.get("suggestion_state", "pending"),
             ),
         )
-
-
-class CodingStandardsRequest(BaseModel):
-    project_id: str
-    filename: str
-
-
-class CodingStandardsResponse(BaseModel):
-    success: bool
-    agent: str
-    suggestions: Optional[list[dict]] = None
-    model: str
-    error: Optional[dict] = None
-
-
-@app.post(
-    "/_dev-coding-standards-agent",
-    summary="Run coding standards agent on a file",
-    description=(
-        "Reads project info from `.state.json`, loads the specified file "
-        "using `file_io.read_file_content`, and runs the CodingStandardsAgent "
-        "to get style/maintainability suggestions. **For development/testing only.**"
-    ),
-    # response_model=CodingStandardsResponse,
-    status_code=200,
-    responses={
-        400: {"description": "No active project or file not found"},
-        500: {"description": "Agent execution error"},
-    },
-)
-def dev_coding_standards_agent(req: CodingStandardsRequest):
-    if not STATE_FILE.is_file():
-        raise HTTPException(status_code=400, detail="No active project. Call /open-project first.")
-
-    with open(STATE_FILE, "r") as f:
-        state = json.load(f)
-
-    project_path = state["project_path"]
-    file_path = os.path.join(project_path, req.filename)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=400, detail="File not found in project")
-
-    try:
-        file_content = read_file_content(file_path)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read file")
-
-    code_file = {
-        "filename": req.filename,
-        "total_lines": file_content["total_lines"],
-        "lines": file_content["lines"],
-    }
-
-    project_context = {
-        "project_name": state["project_name"],
-    }
-
-    local_db_path = os.path.join(project_path, ".airefactor.db")
-    if os.path.isfile(local_db_path):
-        local_db = SQLiteDB(local_db_path)
-        err, rows = local_db.read(
-            "project_info",
-            "SELECT project_context FROM {table} WHERE project_id = ?",
-            params=(state["project_id"],),
-        )
-        if not err and rows and rows[0].get("project_context"):
-            try:
-                project_context = json.loads(rows[0]["project_context"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-    
-    # result = run_coding_standards_agent(
-    #     prompt="Review this file for coding standards issues.",
-    #     project_context=project_context,
-    #     git_context={},
-    #     code_file=code_file,
-    #     api_key=str(os.getenv("GROQ_API_KEY")),
-    # )
-    
-    # ==> Simulation of coding standards agent response for testing purposes
-    
-    result = {
-        "success": true,
-        "agent": "CodingStandardsAgent",
-        "suggestions": [
-            {
-            "suggestion_title": "Remove unused imports",
-            "suggestion_description": "Modules 'os' and 'sys' are imported but never used, leading to unnecessary dependencies.",
-            "line_no_from": 2,
-            "line_no_to": 3,
-            "replace_by": "",
-            "suggestion_id": "0e52b245306b4604455751b624007e0191176565527d8fe89e6fc17823b2cf78",
-            "old_lines": "import os\nimport sys",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Rename variable to snake_case",
-            "suggestion_description": "Variable 'gameName' does not follow Python's snake_case naming convention.",
-            "line_no_from": 6,
-            "line_no_to": 6,
-            "replace_by": "game_name = \"Tic Tac Toe\"",
-            "suggestion_id": "21ac074ed4f6364608fa8b57ba788a65b7cd814df533f49e4fbc9ff61851c0ad",
-            "old_lines": "gameName = \"Tic Tac Toe\"",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Rename variable to snake_case",
-            "suggestion_description": "Variable 'randomThing' does not follow snake_case naming convention.",
-            "line_no_from": 10,
-            "line_no_to": 10,
-            "replace_by": "random_thing = random.randint(1, 100)",
-            "suggestion_id": "3e459335a6cc499e7305ffafcb8895033666791845102318c365138b9e632de6",
-            "old_lines": "randomThing = random.randint(1, 100)",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Remove unused variables",
-            "suggestion_description": "Variables 'unused_variable' and 'another_unused_variable' are never referenced.",
-            "line_no_from": 11,
-            "line_no_to": 12,
-            "replace_by": "",
-            "suggestion_id": "c771d1b59c300526b2e4dfa45dd213261f8edf238b04a4ec6892bcf19b969e90",
-            "old_lines": "unused_variable = \"hello\"\nanother_unused_variable = None",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Remove dead code variables",
-            "suggestion_description": "Variables 'board_size', 'x', 'y', and 'z' are defined but never used.",
-            "line_no_from": 13,
-            "line_no_to": 16,
-            "replace_by": "",
-            "suggestion_id": "5d303516951d52cf011f41c04e71f3ccb85b2d19e802c5cbf7ef58158e5a0699",
-            "old_lines": "board_size = 3\nx = 0\ny = 0\nz = \"nothing\"",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Add docstring to show_board",
-            "suggestion_description": "Public function 'show_board' lacks a docstring describing its purpose.",
-            "line_no_from": 21,
-            "line_no_to": 21,
-            "replace_by": "    \"\"\"Display the current game board.\"\"\"\n    print(\"\")",
-            "suggestion_id": "35d6751dfe358b5e3edf7870aacc89bdc2989743fa3ea61b29caba20c05c974e",
-            "old_lines": "    print(\"\")",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Add docstring to check_winner",
-            "suggestion_description": "Public function 'check_winner' lacks a docstring describing its purpose.",
-            "line_no_from": 31,
-            "line_no_to": 31,
-            "replace_by": "        \"\"\"Check if there is a winner on the board.\"\"\"\n        if board[0] == board[1] and board[1] == board[2] and board[0] != \" \":",
-            "suggestion_id": "cd54760847555e14f3735c85f78974ecad9c2787d6739d9917443831e7557f43",
-            "old_lines": "    if board[0] == board[1] and board[1] == board[2] and board[0] != \" \":",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Add docstring to board_full",
-            "suggestion_description": "Public function 'board_full' lacks a docstring describing its purpose.",
-            "line_no_from": 59,
-            "line_no_to": 59,
-            "replace_by": "        \"\"\"Return True if the board has no empty spaces.\"\"\"\n        for item in board:",
-            "suggestion_id": "414e005fa4475f69efe9cfc7c1f93c3c9b0ad524a680ea3fc593fa07ed65f470",
-            "old_lines": "    for item in board:",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Add docstring to play_game",
-            "suggestion_description": "Public function 'play_game' lacks a docstring describing its purpose.",
-            "line_no_from": 66,
-            "line_no_to": 66,
-            "replace_by": "        \"\"\"Main game loop handling player turns and game flow.\"\"\"\n        current_player = \"X\"",
-            "suggestion_id": "94516fd6b3b0586ad293cb49c3be7e74dbefa40679ab05f88e1651bc24759229",
-            "old_lines": "    current_player = \"X\"",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Rename variable usage to snake_case",
-            "suggestion_description": "Reference to 'gameName' should match the renamed variable 'game_name'.",
-            "line_no_from": 110,
-            "line_no_to": 110,
-            "replace_by": "print(\"Welcome to \" + game_name)",
-            "suggestion_id": "42d5632b80b76a13aa9db5e81cbaa350485357659c83a48230200b5af7783133",
-            "old_lines": "print(\"Welcome to \" + gameName)",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            },
-            {
-            "suggestion_title": "Rename variable usage to snake_case",
-            "suggestion_description": "Reference to 'randomThing' should match the renamed variable 'random_thing'.",
-            "line_no_from": 112,
-            "line_no_to": 112,
-            "replace_by": "print(\"Random useless value:\", random_thing)",
-            "suggestion_id": "1be0c26574b488078b1b0bec756117a6193e95d668ded8b46d15e39f4444d5e2",
-            "old_lines": "print(\"Random useless value:\", randomThing)",
-            "suggestion_state": "pending",
-            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
-            }
-        ],
-        "model": "openai/gpt-oss-120b",
-        "error": {
-            "type": "",
-            "message": ""
-        }
-        }
-    
-    err_type = (result.get("error") or {}).get("type", "")
-        
-    if result["success"]:
-        update_suggestions(project_path, result["agent"], result.get("suggestions", []))
-        return {
-            "success": True,
-            "agent": result["agent"],
-            "suggestions": result.get("suggestions", []),
-            "model": result.get("model", ""),
-            "error": {
-                "type": err_type,
-                "message": result.get("error", {}).get("message", ""),
-            }
-        }
-    elif err_type == "AuthenticationError":
-        return {
-            "success": False,
-            "agent": result["agent"],
-            "model": result.get("model", ""),
-            "error": {
-                "type": err_type,
-                "message": result.get("error", {}).get("message", ""),
-            }
-        }
-    elif err_type == "APIStatusError" and "429" in (result.get("error") or {}).get("message", ""):
-        return {
-            "success": False,
-            "agent": result["agent"],
-            "model": result.get("model", ""),
-            "error": {
-                "type": err_type,
-                "message": result.get("error", {}).get("message", ""),
-            }
-        }
-    else:
-        return {
-            "success": False,
-            "error" : {
-                "Internal Server Error": result.get("error", {}).get("message", "Unknown error occurred")
-            }
-        }
 
 
 class AcceptSuggestionRequest(BaseModel):
