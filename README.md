@@ -6,7 +6,16 @@ A FastAPI-based backend for AI-powered code refactoring suggestions.
 
 ```bash
 cd backend
+
+# open-keypool is on TestPyPI — install it separately first
+pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  open-keypool
+
+# then install the rest of the dependencies
 pip install -r requirements.txt
+
 cp .env.example .env
 # edit .env with your Doppler token
 python3 main.py
