@@ -1,0 +1,37 @@
+info:
+  name: /open_project
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: http://127.0.0.1:8000/open_project
+  body:
+    type: json
+    data: |-
+      {
+        "is_new": true,
+        "project_name": "TestTicTacToe",
+        "folder_path": "/data/data/com.termux/files/home/TestProject",
+        "project_id": "0f9f6bb7a6c32603a1de44e7557a9bdb85d428ad63a60e645599a4152c055de0",
+        "project_context": {
+          "project_name": "Simple Tic Tac Toe",
+          "project_description": "A basic command-line Tic Tac Toe game for two players.",
+          "technology": "Python",
+          "framework": "None",
+          "database": "None",
+          "platform": "Command Line Interface",
+          "architecture": "Single-file procedural program",
+          "players": 2,
+          "game_mode": "Player vs Player",
+          "dependencies": [],
+          "main_file": "game.py"
+        }
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

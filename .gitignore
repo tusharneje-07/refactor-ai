@@ -9,3 +9,4 @@ __pycache__/
 backend/.env
 .test.py
 .llm_call_log.log
+.venv

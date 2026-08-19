@@ -1,0 +1,21 @@
+info:
+  name: /validate_project_path
+  type: http
+  seq: 3
+
+http:
+  method: POST
+  url: http://127.0.0.1:8000/validate_project_path
+  body:
+    type: json
+    data: |-
+      {
+        "folder_path": "/run/media/tusharneje/New Volume1/Projects and Coding/Projects/TestTicTacToe"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

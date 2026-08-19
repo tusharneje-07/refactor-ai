@@ -1,0 +1,23 @@
+info:
+  name: /refactor
+  type: http
+  seq: 4
+
+http:
+  method: POST
+  url: http://127.0.0.1:8000/refactor
+  body:
+    type: json
+    data: |-
+      {
+        "project_id": "0f9f6bb7a6c32603a1de44e7557a9bdb85d428ad63a60e645599a4152c055de0",
+        "filename": "game.py",
+        "agent_id": "coding-standards-agent-01"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

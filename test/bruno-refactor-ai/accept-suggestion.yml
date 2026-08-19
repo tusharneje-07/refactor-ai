@@ -1,0 +1,25 @@
+info:
+  name: /accept-suggestion
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: http://127.0.0.1:8000/accept_suggestion
+  body:
+    type: json
+    data: |-
+      {
+        "project_id": "0f9f6bb7a6c32603a1de44e7557a9bdb85d428ad63a60e645599a4152c055de0",
+        "filename": "game.py",
+        "suggestion_id": "9a3d0920c69c9712dc8d405a38e984a8ca3c38416ff7954982699bef584d8788",
+        "batch_id": "75b029c97b2a32bc620123c036489db7",
+        "accept": false
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
