@@ -257,6 +257,15 @@ def _repair_json(text: str) -> str:
     if repaired.endswith(","):
         repaired = repaired[:-1]
 
+    while repaired and repaired[-1] not in ('"', '}', ']', ':', ',', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n', 'e'):
+        repaired = repaired[:-1]
+
+    if repaired.endswith(","):
+        repaired = repaired[:-1]
+
+    if repaired.endswith(":"):
+        repaired += 'null'
+
     open_brackets = repaired.count("[") - repaired.count("]")
     open_braces = repaired.count("{") - repaired.count("}")
 
@@ -345,8 +354,26 @@ def run_coding_standards_agent(
             parsed = json.loads(repaired)
 
         final_suggestions = []
+        # Batch ID is used to group suggestions from the same agent run, useful for tracking and rollback.
+        batch_id = hashlib.md5(str(time.time() * 1000).encode()).hexdigest()  # Unique batch ID based on current time in milliseconds
         for suggestion in parsed:
-            suggestion["suggestion-id"] = hashlib.sha256(f"CodingStandardsAgent_{time.time() * 1000}".encode("utf-8")).hexdigest()
+            if not isinstance(suggestion, dict):
+                continue
+            suggestion.setdefault("suggestion_id", hashlib.sha256(f"CodingStandardsAgent_{time.time() * 1000}_{len(final_suggestions)}".encode("utf-8")).hexdigest())
+            suggestion.setdefault("suggestion_description", "")
+            suggestion.setdefault("line_no_from", 0)
+            suggestion.setdefault("line_no_to", 0)
+            suggestion.setdefault("replace_by", "")
+            suggestion.setdefault("old_lines", "")
+            suggestion.setdefault("suggestion_state", "pending")
+            suggestion.setdefault("batch_id", batch_id)
+            lines_map = code_file["lines"]
+            if suggestion["line_no_from"] > 0 and suggestion["line_no_to"] >= suggestion["line_no_from"]:
+                old_lines_parts = []
+                for i in range(suggestion["line_no_from"], suggestion["line_no_to"] + 1):
+                    line = lines_map.get(i) or lines_map.get(str(i)) or ""
+                    old_lines_parts.append(line)
+                suggestion["old_lines"] = "\n".join(old_lines_parts)
             final_suggestions.append(suggestion)
         return {
             "success": True,

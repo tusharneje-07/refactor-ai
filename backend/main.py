@@ -8,9 +8,10 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import true
 
 from modules.sqlite_io import SQLiteDB
-from modules.file_io import read_file_content
+from modules.file_io import read_file_content, replace_file_content
 from agents.CodingStandardsAgent import run_coding_standards_agent
 from open_keypool import KeyPool
 
@@ -91,15 +92,16 @@ def _create_project_local_db(folder_path: str, project_id: str, project_name: st
     )
     db.runQuery(
         """CREATE TABLE IF NOT EXISTS suggestions (
-            suggestion_id TEXT PRIMARY KEY,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            lnf INTEGER NOT NULL,
-            lnt INTEGER NOT NULL,
+            suggestion_id TEXT PRIMARY KEY,
+            suggestion_description TEXT NOT NULL,
+            line_no_from INTEGER NOT NULL,
+            line_no_to INTEGER NOT NULL,
             old_lines TEXT NOT NULL,
-            replaced_by TEXT NOT NULL,
-            reason TEXT NOT NULL,
+            replace_by TEXT NOT NULL,
             agent_id TEXT NOT NULL,
-            is_accepted BOOLEAN NOT NULL DEFAULT 0
+            batch_id TEXT NOT NULL,
+            suggestion_state TEXT NOT NULL
         )"""
     )
 
@@ -370,38 +372,354 @@ def validate_project_path(req: ValidateProjectPathRequest):
 class RefactorRequest(BaseModel):
     project_id: str
     filename: str
+    agent_id: str
 
 
 class RefactorResponse(BaseModel):
-    status: str
+    success: bool
+    agent: str
+    suggestions: Optional[list[dict]] = None
+    model: str
+    error: Optional[dict] = None
+
+
+def _get_agent_config_by_id(agent_id: str) -> Optional[dict]:
+    model_config_path = BASE_DIR / "model_config.json"
+    try:
+        with open(model_config_path, "r") as f:
+            config = json.load(f)
+    except Exception:
+        return None
+
+    for agent_name, agent_config in config.items():
+        if agent_config.get("agent_id") == agent_id:
+            result = dict(agent_config)
+            result["config_key"] = agent_name
+            return result
+    return None
+
+
+def _run_coding_standards_flow(project_id: str, filename: str):
+    if not STATE_FILE.is_file():
+        raise HTTPException(status_code=400, detail="No active project. Call /open-project first.")
+
+    with open(STATE_FILE, "r") as f:
+        state = json.load(f)
+
+    if state.get("project_id") != project_id:
+        raise HTTPException(status_code=400, detail="project_id does not match active project")
+
+    project_path = state["project_path"]
+    file_path = os.path.join(project_path, filename)
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=400, detail="File not found in project")
+
+    try:
+        file_content = read_file_content(file_path)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read file")
+
+    code_file = {
+        "filename": filename,
+        "total_lines": file_content["total_lines"],
+        "lines": file_content["lines"],
+    }
+
+    project_context = {
+        "project_name": state["project_name"],
+    }
+
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    if os.path.isfile(local_db_path):
+        local_db = SQLiteDB(local_db_path)
+        err, rows = local_db.read(
+            "project_info",
+            "SELECT project_context FROM {table} WHERE project_id = ?",
+            params=(state["project_id"],),
+        )
+        if not err and rows and rows[0].get("project_context"):
+            try:
+                project_context = json.loads(rows[0]["project_context"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # result = run_coding_standards_agent(
+    #     prompt="Review this file for coding standards issues.",
+    #     project_context=project_context,
+    #     git_context={},
+    #     code_file=code_file,
+    #     api_key=str(os.getenv("GROQ_API_KEY")),
+    # )
+
+    # [DEV] Simulation of coding standards agent response for testing purposes
+    result = {
+        "success": true,
+        "agent": "CodingStandardsAgent",
+        "suggestions": [
+            {
+            "suggestion_title": "Rename variable to snake_case",
+            "suggestion_description": "Variable 'randomThing' should follow snake_case naming convention.",
+            "line_no_from": 8,
+            "line_no_to": 8,
+            "replace_by": "random_thing = random.randint(1, 100)",
+            "suggestion_id": "2501c051e2bbcd24478e39b11df5cc3ba6004fd27e7ed630f31b63ad0f51cfe4",
+            "old_lines": "randomThing = random.randint(1, 100)",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Remove unused variable",
+            "suggestion_description": "'unused_variable' is never used.",
+            "line_no_from": 9,
+            "line_no_to": 9,
+            "replace_by": "",
+            "suggestion_id": "9a3d0920c69c9712dc8d405a38e984a8ca3c38416ff7954982699bef584d8788",
+            "old_lines": "unused_variable = \"hello\"",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Remove unused variable",
+            "suggestion_description": "'another_unused_variable' is never used.",
+            "line_no_from": 10,
+            "line_no_to": 10,
+            "replace_by": "",
+            "suggestion_id": "4abbd7b51ea602299f0b09508f3ff65494ffd45725a659f314aeaafc9143d641",
+            "old_lines": "another_unused_variable = None",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Remove unused variable",
+            "suggestion_description": "'board_size' is never used.",
+            "line_no_from": 11,
+            "line_no_to": 11,
+            "replace_by": "",
+            "suggestion_id": "4023012bd85edffb2fc3dfd054daf5dcea7e038582b5f443c0b6f9ad16c4184e",
+            "old_lines": "board_size = 3",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Remove dead code",
+            "suggestion_description": "Variables 'x', 'y', and 'z' are never used.",
+            "line_no_from": 12,
+            "line_no_to": 14,
+            "replace_by": "",
+            "suggestion_id": "5939cac144242287c829b12c8a10a3466207c7cc3c4b682efa95e4d0ab01f996",
+            "old_lines": "x = 0\ny = 0\nz = \"nothing\"",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Add docstring to show_board",
+            "suggestion_description": "Public function should have a docstring describing its purpose.",
+            "line_no_from": 18,
+            "line_no_to": 18,
+            "replace_by": "def show_board():\n    \"\"\"Display the current game board.\"\"\"",
+            "suggestion_id": "38a8d665f1d4690098ecf0bcfab79f810fa39d0c6e02456a8ba5a85e7802e511",
+            "old_lines": "def show_board():",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Add docstring to check_winner",
+            "suggestion_description": "Public function should have a docstring describing its purpose.",
+            "line_no_from": 28,
+            "line_no_to": 28,
+            "replace_by": "def check_winner():\n    \"\"\"Check the board for a winner and return the winning symbol, or None.\"\"\"",
+            "suggestion_id": "3f5cb5b84ed892d47f0072c07c5e1926e67319d2c039e27e217a64e55e7aae19",
+            "old_lines": "def check_winner():",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Add docstring to board_full",
+            "suggestion_description": "Public function should have a docstring describing its purpose.",
+            "line_no_from": 56,
+            "line_no_to": 56,
+            "replace_by": "def board_full():\n    \"\"\"Return True if the board has no empty spaces, otherwise False.\"\"\"",
+            "suggestion_id": "0cf5001668aa8ceb8a074ec5baa647f67fd3059575968807c9a95ab0ed03ac7f",
+            "old_lines": "def board_full():",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Add docstring to play_game",
+            "suggestion_description": "Public function should have a docstring describing its purpose.",
+            "line_no_from": 63,
+            "line_no_to": 63,
+            "replace_by": "def play_game():\n    \"\"\"Main game loop handling player turns and game outcome.\"\"\"",
+            "suggestion_id": "6d86ee452c3cf9d6d69c1dae65c9b73de77a62fdfae1c9eb78cbbed2b3215405",
+            "old_lines": "def play_game():",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Use f-string for player turn message",
+            "suggestion_description": "String concatenation should be replaced with an f-string for readability.",
+            "line_no_from": 70,
+            "line_no_to": 70,
+            "replace_by": "print(f\"{player_name} turn ({current_player})\")",
+            "suggestion_id": "faf089552243da8b8cc7f82170ae21cfc987e68d44117bf5d60af668f05d0660",
+            "old_lines": "        print(player_name + \" turn (\" + current_player + \")\")",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Use 'is not None' comparison",
+            "suggestion_description": "Comparison to None should use 'is not None' for idiomatic Python.",
+            "line_no_from": 90,
+            "line_no_to": 90,
+            "replace_by": "if winner is not None:",
+            "suggestion_id": "872a24d73db71b73f3fab682dfa92e3d9299aa790262f94678c6744988f27361",
+            "old_lines": "        if winner != None:",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Simplify boolean check",
+            "suggestion_description": "Comparing a boolean expression to True is unnecessary.",
+            "line_no_from": 95,
+            "line_no_to": 95,
+            "replace_by": "if board_full():",
+            "suggestion_id": "31179374f88f3c7699c8efb49b077d8239d0d1c5d613c3452a11ff3b000b21d8",
+            "old_lines": "        if board_full() == True:",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Fix variable name and use f-string",
+            "suggestion_description": "'gameName' does not follow naming conventions and is undefined; replace with 'game_name' using an f-string.",
+            "line_no_from": 108,
+            "line_no_to": 108,
+            "replace_by": "print(f\"Welcome to {game_name}\")",
+            "suggestion_id": "84c2b499ec24afdb080c4c79c6a8f08f2cabc960b0570a2399032316a6822c89",
+            "old_lines": "print(\"Welcome to \" + gameName)",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            },
+            {
+            "suggestion_title": "Update variable name and use f-string",
+            "suggestion_description": "'randomThing' should be renamed to 'random_thing' and printed using an f-string.",
+            "line_no_from": 110,
+            "line_no_to": 110,
+            "replace_by": "print(f\"Random useless value: {random_thing}\")",
+            "suggestion_id": "7e8e2569f850a7edbe943d631bf5527b9a82f4f69ab0e40c30960d2b6c7f3262",
+            "old_lines": "print(\"Random useless value:\", randomThing)",
+            "suggestion_state": "pending",
+            "batch_id": "75b029c97b2a32bc620123c036489db7"
+            }
+        ],
+        "model": "openai/gpt-oss-120b",
+        "error": {
+            "type": "",
+            "message": ""
+        }
+        }
+
+    err_type = (result.get("error") or {}).get("type", "")
+
+    if result["success"]:
+        update_suggestions(project_path, result["agent"], result.get("suggestions", []))
+        return {
+            "success": True,
+            "agent": result["agent"],
+            "suggestions": result.get("suggestions", []),
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    elif err_type == "AuthenticationError":
+        return {
+            "success": False,
+            "agent": result["agent"],
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    elif err_type == "APIStatusError" and "429" in (result.get("error") or {}).get("message", ""):
+        return {
+            "success": False,
+            "agent": result["agent"],
+            "model": result.get("model", ""),
+            "error": {
+                "type": err_type,
+                "message": result.get("error", {}).get("message", ""),
+            }
+        }
+    else:
+        return {
+            "success": False,
+            "error" : {
+                "Internal Server Error": result.get("error", {}).get("message", "Unknown error occurred")
+            }
+        }
+
+# DEV/TEST MODEL/ENDPOINTS (not for final use)
+class CodingStandardsRequest(BaseModel):
     project_id: str
     filename: str
-    message: str
+
+# DEV/TEST MODEL/ENDPOINTS (not for final use)
+class CodingStandardsResponse(BaseModel):
+    success: bool
+    agent: str
+    suggestions: Optional[list[dict]] = None
+    model: str
+    error: Optional[dict] = None
+
+# DEV/TEST MODEL/ENDPOINTS (not for final use)
+@app.post(
+    "/_dev-coding-standards-agent",
+    summary="Run coding standards agent on a file",
+    description=(
+        "Reads project info from `.state.json`, loads the specified file "
+        "using `file_io.read_file_content`, and runs the CodingStandardsAgent "
+        "to get style/maintainability suggestions. **For development/testing only.**"
+    ),
+    # response_model=CodingStandardsResponse,
+    status_code=200,
+    responses={
+        400: {"description": "No active project or file not found"},
+        500: {"description": "Agent execution error"},
+    },
+)
+def dev_coding_standards_agent(req: CodingStandardsRequest):
+    return _run_coding_standards_flow(req.project_id, req.filename)
 
 
 @app.post(
     "/refactor",
     summary="Trigger a refactor on a file",
     description=(
-        "Analyzes the specified file in the project and returns refactor suggestions. "
-        "This endpoint is currently a stub and always returns a pending status."
+        "Analyzes the specified file in the active project and returns suggestions "
+        "from the requested agent after validating the agent_id against model_config.json."
     ),
     response_model=RefactorResponse,
     status_code=200,
     responses={
+        400: {"description": "Invalid agent_id or active project mismatch"},
         404: {"description": "Project or file not found"},
         500: {"description": "Internal error during refactoring"},
     },
 )
 def refactor(req: RefactorRequest):
-    return {
-        "status": "pending",
-        "project_id": req.project_id,
-        "filename": req.filename,
-        "message": "Refactor endpoint is not yet implemented",
-    }
+    agent_config = _get_agent_config_by_id(req.agent_id)
+    if not agent_config:
+        raise HTTPException(status_code=400, detail="Invalid agent_id")
 
+    if agent_config.get("config_key") == "CodingStandardsAgent":
+        return _run_coding_standards_flow(req.project_id, req.filename)
 
+    raise HTTPException(status_code=400, detail="Unsupported agent_id")
+
+# (/_dev_flush-data) DEV/TEST MODEL/ENDPOINTS (not for final use)
 @app.post(
     "/_dev_flush-data",
     summary="Flush all data from the central database",
@@ -419,6 +737,83 @@ def dev_flush_data():
     db = SQLiteDB(str(CENTRAL_DB_PATH))
     db.runQuery("DELETE FROM projects")
     return {"status": "ok", "message": "All data flushed from central DB"}
+
+# (/_dev_flush_suggestion) DEV/TEST MODEL/ENDPOINTS (not for final use)
+class FlushSuggestionsRequest(BaseModel):
+    project_id: str
+
+# (/_dev_flush_suggestion) DEV/TEST MODEL/ENDPOINTS (not for final use)
+@app.post(
+    "/_dev_flush_suggestion",
+    summary="Flush all suggestions from a project's local database",
+    description=(
+        "Deletes all rows from the `suggestions` table in the project's "
+        "local `.airefactor.db`. **For development/testing only.**"
+    ),
+    status_code=200,
+    responses={
+        404: {"description": "Project not found in central DB"},
+        500: {"description": "Database error"},
+    },
+)
+def dev_flush_suggestions(req: FlushSuggestionsRequest):
+    _ensure_central_db()
+    central_db = SQLiteDB(str(CENTRAL_DB_PATH))
+    err, rows = central_db.read(
+        "projects",
+        "SELECT * FROM {table} WHERE project_id = ?",
+        params=(req.project_id,),
+    )
+    if err:
+        raise HTTPException(status_code=500, detail="Database read error")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project_path = rows[0]["project_path"]
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    if not os.path.isfile(local_db_path):
+        raise HTTPException(status_code=404, detail="Project local DB not found")
+
+    db = SQLiteDB(local_db_path)
+    db.runQuery("DELETE FROM suggestions")
+    return {"status": "ok", "message": "All suggestions flushed"}
+
+
+def update_suggestions(project_path: str, agent_id: str, suggestions: list[dict]):
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    db = SQLiteDB(local_db_path)
+    db.runQuery(
+        """CREATE TABLE IF NOT EXISTS suggestions (
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            suggestion_id TEXT PRIMARY KEY,
+            suggestion_description TEXT NOT NULL,
+            line_no_from INTEGER NOT NULL,
+            line_no_to INTEGER NOT NULL,
+            old_lines TEXT NOT NULL,
+            replace_by TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            batch_id TEXT NOT NULL,
+            suggestion_state TEXT NOT NULL
+        )"""
+    )
+    for s in suggestions:
+        db.runQuery(
+            """INSERT OR REPLACE INTO suggestions
+               (suggestion_id, suggestion_description, line_no_from, line_no_to,
+                old_lines, replace_by, agent_id, batch_id, suggestion_state)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            params=(
+                s.get("suggestion_id", ""),
+                s.get("suggestion_description", ""),
+                s.get("line_no_from", 0),
+                s.get("line_no_to", 0),
+                s.get("old_lines", ""),
+                s.get("replace_by", ""),
+                agent_id,
+                s.get("batch_id", "ERBTCH"),
+                s.get("suggestion_state", "pending"),
+            ),
+        )
 
 
 class CodingStandardsRequest(BaseModel):
@@ -491,16 +886,153 @@ def dev_coding_standards_agent(req: CodingStandardsRequest):
             except (json.JSONDecodeError, TypeError):
                 pass
     
-    result = run_coding_standards_agent(
-        prompt="Review this file for coding standards issues.",
-        project_context=project_context,
-        git_context={},
-        code_file=code_file,
-        api_key=str(os.getenv("GROQ_API_KEY")),
-    )
-    err_type = (result.get("error") or {}).get("type", "")
+    # result = run_coding_standards_agent(
+    #     prompt="Review this file for coding standards issues.",
+    #     project_context=project_context,
+    #     git_context={},
+    #     code_file=code_file,
+    #     api_key=str(os.getenv("GROQ_API_KEY")),
+    # )
     
+    # ==> Simulation of coding standards agent response for testing purposes
+    
+    result = {
+        "success": true,
+        "agent": "CodingStandardsAgent",
+        "suggestions": [
+            {
+            "suggestion_title": "Remove unused imports",
+            "suggestion_description": "Modules 'os' and 'sys' are imported but never used, leading to unnecessary dependencies.",
+            "line_no_from": 2,
+            "line_no_to": 3,
+            "replace_by": "",
+            "suggestion_id": "0e52b245306b4604455751b624007e0191176565527d8fe89e6fc17823b2cf78",
+            "old_lines": "import os\nimport sys",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Rename variable to snake_case",
+            "suggestion_description": "Variable 'gameName' does not follow Python's snake_case naming convention.",
+            "line_no_from": 6,
+            "line_no_to": 6,
+            "replace_by": "game_name = \"Tic Tac Toe\"",
+            "suggestion_id": "21ac074ed4f6364608fa8b57ba788a65b7cd814df533f49e4fbc9ff61851c0ad",
+            "old_lines": "gameName = \"Tic Tac Toe\"",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Rename variable to snake_case",
+            "suggestion_description": "Variable 'randomThing' does not follow snake_case naming convention.",
+            "line_no_from": 10,
+            "line_no_to": 10,
+            "replace_by": "random_thing = random.randint(1, 100)",
+            "suggestion_id": "3e459335a6cc499e7305ffafcb8895033666791845102318c365138b9e632de6",
+            "old_lines": "randomThing = random.randint(1, 100)",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Remove unused variables",
+            "suggestion_description": "Variables 'unused_variable' and 'another_unused_variable' are never referenced.",
+            "line_no_from": 11,
+            "line_no_to": 12,
+            "replace_by": "",
+            "suggestion_id": "c771d1b59c300526b2e4dfa45dd213261f8edf238b04a4ec6892bcf19b969e90",
+            "old_lines": "unused_variable = \"hello\"\nanother_unused_variable = None",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Remove dead code variables",
+            "suggestion_description": "Variables 'board_size', 'x', 'y', and 'z' are defined but never used.",
+            "line_no_from": 13,
+            "line_no_to": 16,
+            "replace_by": "",
+            "suggestion_id": "5d303516951d52cf011f41c04e71f3ccb85b2d19e802c5cbf7ef58158e5a0699",
+            "old_lines": "board_size = 3\nx = 0\ny = 0\nz = \"nothing\"",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Add docstring to show_board",
+            "suggestion_description": "Public function 'show_board' lacks a docstring describing its purpose.",
+            "line_no_from": 21,
+            "line_no_to": 21,
+            "replace_by": "    \"\"\"Display the current game board.\"\"\"\n    print(\"\")",
+            "suggestion_id": "35d6751dfe358b5e3edf7870aacc89bdc2989743fa3ea61b29caba20c05c974e",
+            "old_lines": "    print(\"\")",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Add docstring to check_winner",
+            "suggestion_description": "Public function 'check_winner' lacks a docstring describing its purpose.",
+            "line_no_from": 31,
+            "line_no_to": 31,
+            "replace_by": "        \"\"\"Check if there is a winner on the board.\"\"\"\n        if board[0] == board[1] and board[1] == board[2] and board[0] != \" \":",
+            "suggestion_id": "cd54760847555e14f3735c85f78974ecad9c2787d6739d9917443831e7557f43",
+            "old_lines": "    if board[0] == board[1] and board[1] == board[2] and board[0] != \" \":",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Add docstring to board_full",
+            "suggestion_description": "Public function 'board_full' lacks a docstring describing its purpose.",
+            "line_no_from": 59,
+            "line_no_to": 59,
+            "replace_by": "        \"\"\"Return True if the board has no empty spaces.\"\"\"\n        for item in board:",
+            "suggestion_id": "414e005fa4475f69efe9cfc7c1f93c3c9b0ad524a680ea3fc593fa07ed65f470",
+            "old_lines": "    for item in board:",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Add docstring to play_game",
+            "suggestion_description": "Public function 'play_game' lacks a docstring describing its purpose.",
+            "line_no_from": 66,
+            "line_no_to": 66,
+            "replace_by": "        \"\"\"Main game loop handling player turns and game flow.\"\"\"\n        current_player = \"X\"",
+            "suggestion_id": "94516fd6b3b0586ad293cb49c3be7e74dbefa40679ab05f88e1651bc24759229",
+            "old_lines": "    current_player = \"X\"",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Rename variable usage to snake_case",
+            "suggestion_description": "Reference to 'gameName' should match the renamed variable 'game_name'.",
+            "line_no_from": 110,
+            "line_no_to": 110,
+            "replace_by": "print(\"Welcome to \" + game_name)",
+            "suggestion_id": "42d5632b80b76a13aa9db5e81cbaa350485357659c83a48230200b5af7783133",
+            "old_lines": "print(\"Welcome to \" + gameName)",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            },
+            {
+            "suggestion_title": "Rename variable usage to snake_case",
+            "suggestion_description": "Reference to 'randomThing' should match the renamed variable 'random_thing'.",
+            "line_no_from": 112,
+            "line_no_to": 112,
+            "replace_by": "print(\"Random useless value:\", random_thing)",
+            "suggestion_id": "1be0c26574b488078b1b0bec756117a6193e95d668ded8b46d15e39f4444d5e2",
+            "old_lines": "print(\"Random useless value:\", randomThing)",
+            "suggestion_state": "pending",
+            "batch_id": "8375a19035ce82c42546da9a1e028bc6"
+            }
+        ],
+        "model": "openai/gpt-oss-120b",
+        "error": {
+            "type": "",
+            "message": ""
+        }
+        }
+    
+    err_type = (result.get("error") or {}).get("type", "")
+        
     if result["success"]:
+        update_suggestions(project_path, result["agent"], result.get("suggestions", []))
         return {
             "success": True,
             "agent": result["agent"],
@@ -539,6 +1071,181 @@ def dev_coding_standards_agent(req: CodingStandardsRequest):
             }
         }
 
+
+class AcceptSuggestionRequest(BaseModel):
+    project_id: str
+    filename: str
+    suggestion_id: str
+    batch_id: str
+    accept: bool
+
+
+class AcceptSuggestionResponse(BaseModel):
+    success: bool
+    accepted: bool
+    suggestion_id: str
+    batch_id: str
+    adjustment: Optional[dict] = None
+    remaining_suggestions: list[dict] = []
+    message: str = ""
+
+
+def _shift_pending_line_numbers(
+    db: SQLiteDB,
+    accepted_to: int,
+    extra: int,
+    batch_id: str,
+    exclude_suggestion_id: str,
+):
+    """
+    Shift line_no_from/line_no_to for remaining pending suggestions in the same batch.
+    Only suggestions entirely after the accepted range (line_no_from > accepted_to) are shifted.
+    """
+    if extra == 0:
+        return
+
+    err, rows = db.read(
+        "suggestions",
+        "SELECT suggestion_id, line_no_from, line_no_to FROM {table} "
+        "WHERE suggestion_state = ? AND batch_id = ? AND suggestion_id != ?",
+        params=("pending", batch_id, exclude_suggestion_id),
+    )
+    if err or not rows:
+        return
+
+    for row in rows:
+        lnf = int(row["line_no_from"])
+        lnt = int(row["line_no_to"])
+        if lnf > accepted_to:
+            new_lnf = max(1, lnf + extra)
+            new_lnt = max(new_lnf, lnt + extra)
+            db.runQuery(
+                "UPDATE {table} SET line_no_from = ?, line_no_to = ? WHERE suggestion_id = ?",
+                table_name="suggestions",
+                params=(new_lnf, new_lnt, row["suggestion_id"]),
+            )
+
+
+def _get_pending_suggestions_by_batch(
+    db: SQLiteDB,
+    batch_id: str,
+) -> list[dict]:
+    err, rows = db.read(
+        "suggestions",
+        "SELECT * FROM {table} WHERE suggestion_state = ? AND batch_id = ? "
+        "ORDER BY line_no_from ASC",
+        params=("pending", batch_id),
+    )
+    if err or not rows:
+        return []
+    return rows
+
+
+@app.post(
+    "/accept_suggestion",
+    summary="Accept or reject a pending suggestion",
+    description=(
+        "Accepts or rejects a pending suggestion from the project's local `.airefactor.db`. "
+        "On accept, applies the change via `replace_file_content` and shifts line numbers "
+        "of remaining pending suggestions in the same batch (matched by batch_id). "
+        "Returns all remaining pending suggestions for that batch."
+    ),
+    response_model=AcceptSuggestionResponse,
+    status_code=200,
+    responses={
+        400: {"description": "Invalid request or suggestion not pending"},
+        404: {"description": "Project, file, or suggestion not found"},
+        500: {"description": "Failed to apply change or update DB"},
+    },
+)
+def accept_suggestion(req: AcceptSuggestionRequest):
+    if not STATE_FILE.is_file():
+        raise HTTPException(status_code=400, detail="No active project. Call /open-project first.")
+
+    with open(STATE_FILE, "r") as f:
+        state = json.load(f)
+
+    if state.get("project_id") != req.project_id:
+        raise HTTPException(status_code=400, detail="project_id does not match active project")
+
+    project_path = state["project_path"]
+    file_path = os.path.join(project_path, req.filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    if not os.path.isfile(local_db_path):
+        raise HTTPException(status_code=404, detail="Project local DB not found")
+
+    db = SQLiteDB(local_db_path)
+    err, rows = db.read(
+        "suggestions",
+        "SELECT * FROM {table} WHERE suggestion_id = ?",
+        params=(req.suggestion_id,),
+    )
+    if err:
+        raise HTTPException(status_code=500, detail="Database read error")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    suggestion = rows[0]
+    if suggestion.get("suggestion_state") != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Suggestion is not pending (state={suggestion.get('suggestion_state')})",
+        )
+
+    if suggestion.get("batch_id") != req.batch_id:
+        raise HTTPException(status_code=400, detail="batch_id does not match suggestion")
+
+    adjustment = None
+
+    if req.accept:
+        lnf = int(suggestion["line_no_from"])
+        lnt = int(suggestion["line_no_to"])
+        replace_by = suggestion.get("replace_by") or ""
+        try:
+            adjustment = replace_file_content(file_path, lnf, lnt, replace_by)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Failed to apply file change")
+
+        err, _ = db.runQuery(
+            "UPDATE {table} SET suggestion_state = ? WHERE suggestion_id = ?",
+            table_name="suggestions",
+            params=("accepted", req.suggestion_id),
+        )
+        if err:
+            raise HTTPException(status_code=500, detail="Failed to update suggestion state")
+
+        _shift_pending_line_numbers(
+            db,
+            accepted_to=lnt,
+            extra=adjustment["extra_added_removed"],
+            batch_id=req.batch_id,
+            exclude_suggestion_id=req.suggestion_id,
+        )
+        message = "Suggestion accepted and applied"
+    else:
+        err, _ = db.runQuery(
+            "UPDATE {table} SET suggestion_state = ? WHERE suggestion_id = ?",
+            table_name="suggestions",
+            params=("rejected", req.suggestion_id),
+        )
+        if err:
+            raise HTTPException(status_code=500, detail="Failed to update suggestion state")
+        message = "Suggestion rejected"
+
+    remaining = _get_pending_suggestions_by_batch(db, req.batch_id)
+
+    return {
+        "success": True,
+        "accepted": req.accept,
+        "suggestion_id": req.suggestion_id,
+        "batch_id": req.batch_id,
+        "adjustment": adjustment,
+        "remaining_suggestions": remaining,
+        "message": message,
+    }
 
 
 if __name__ == "__main__":
