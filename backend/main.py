@@ -133,7 +133,18 @@ def _read_all_project_files(project_path: str, gitignore_patterns: list[str]) ->
     return file_contents
 
 
-def _build_project_context_for_agent(project_path: str, project_id: str) -> str:
+def _build_project_context_for_agent(project_id: str) -> str:
+    if not STATE_FILE.is_file():
+        raise HTTPException(status_code=400, detail="No active project. Call /open_project first.")
+
+    with open(STATE_FILE, "r") as f:
+        state = json.load(f)
+
+    if state.get("project_id") != project_id:
+        raise HTTPException(status_code=400, detail="project_id does not match active project")
+
+    project_path = state["project_path"]
+
     local_db_path = os.path.join(project_path, ".airefactor.db")
     if not os.path.isfile(local_db_path):
         raise HTTPException(status_code=404, detail="Project local DB not found")
@@ -827,7 +838,7 @@ def dev_coding_standards_agent(req: CodingStandardsRequest):
         "Analyzes the specified file in the active project and returns suggestions "
         "from the requested agent after validating the agent_id against model_config.json."
     ),
-    response_model=RefactorResponse,
+    # response_model=RefactorResponse,
     status_code=200,
     responses={
         400: {"description": "Invalid agent_id or active project mismatch"},
@@ -840,7 +851,13 @@ def refactor(req: RefactorRequest):
     if not agent_config:
         raise HTTPException(status_code=400, detail="Invalid agent_id")
 
-    # ReTake Project Context
+    project_context = _build_project_context_for_agent(req.project_id)
+    
+    with open(BASE_DIR / "test_project_context.text", "w") as f:
+        f.write(project_context)
+
+    return {"success": True, "agent": agent_config.get("config_key"), "project_context": project_context}
+    
     
     if agent_config.get("config_key") == "CodingStandardsAgent":
         return _run_coding_standards_flow(req.project_id, req.filename)
