@@ -12,7 +12,7 @@ http:
       {
         "is_new": true,
         "project_name": "TestTicTacToe",
-        "folder_path": "/data/data/com.termux/files/home/TestProject",
+        "folder_path": "/run/media/tusharneje/New Volume1/Projects and Coding/Projects/TestTicTacToe",
         "project_id": "0f9f6bb7a6c32603a1de44e7557a9bdb85d428ad63a60e645599a4152c055de0",
         "project_context": {
           "project_name": "Simple Tic Tac Toe",

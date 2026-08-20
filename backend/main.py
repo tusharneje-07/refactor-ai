@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import fnmatch
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,131 @@ def _build_file_tree(folder_path: str) -> dict:
             if ext not in EXTENSIONS_TO_EXCLUDE:
                 tree[name] = None  # None marks a file
     return tree
+
+
+def _parse_gitignore(project_path: str) -> list[str]:
+    gitignore_path = os.path.join(project_path, ".gitignore")
+    patterns = []
+    if not os.path.isfile(gitignore_path):
+        return patterns
+    try:
+        with open(gitignore_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                patterns.append(line)
+    except Exception:
+        pass
+    return patterns
+
+
+def _is_ignored(rel_path: str, is_dir: bool, gitignore_patterns: list[str]) -> bool:
+    name = os.path.basename(rel_path)
+    for pattern in gitignore_patterns:
+        p = pattern.rstrip("/")
+        is_dir_pattern = pattern.endswith("/")
+        if is_dir_pattern and not is_dir:
+            continue
+        if fnmatch.fnmatch(name, p):
+            return True
+        if fnmatch.fnmatch(rel_path, p):
+            return True
+        if "/" not in p and fnmatch.fnmatch(name, p):
+            return True
+    return False
+
+
+def _read_all_project_files(project_path: str, gitignore_patterns: list[str]) -> dict:
+    file_contents = {}
+    for root, dirs, files in os.walk(project_path):
+        rel_root = os.path.relpath(root, project_path)
+        if rel_root == ".":
+            rel_root = ""
+
+        dirs_to_remove = []
+        for d in dirs:
+            rel_dir = os.path.join(rel_root, d) if rel_root else d
+            if d.startswith(".") or _is_ignored(rel_dir, True, gitignore_patterns):
+                dirs_to_remove.append(d)
+        for d in dirs_to_remove:
+            dirs.remove(d)
+
+        for fname in files:
+            if fname.startswith(".") and fname != ".gitignore":
+                continue
+            ext = os.path.splitext(fname)[1]
+            if ext in EXTENSIONS_TO_EXCLUDE:
+                continue
+            rel_file = os.path.join(rel_root, fname) if rel_root else fname
+            if _is_ignored(rel_file, False, gitignore_patterns):
+                continue
+            full_path = os.path.join(root, fname)
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                file_contents[rel_file] = content
+            except Exception:
+                file_contents[rel_file] = "<UNREADABLE: binary or permission error>"
+    return file_contents
+
+
+def _build_project_context_for_agent(project_path: str, project_id: str) -> str:
+    local_db_path = os.path.join(project_path, ".airefactor.db")
+    if not os.path.isfile(local_db_path):
+        raise HTTPException(status_code=404, detail="Project local DB not found")
+
+    db = SQLiteDB(local_db_path)
+
+    db.runQuery(
+        "UPDATE {table} SET suggestion_state = ? WHERE suggestion_state = ?",
+        table_name="suggestions",
+        params=("discarded-[user_refresh]", "pending"),
+    )
+
+    project_context = {}
+    err, rows = db.read(
+        "project_info",
+        "SELECT project_context FROM {table} WHERE project_id = ?",
+        params=(project_id,),
+    )
+    if not err and rows and rows[0].get("project_context"):
+        try:
+            project_context = json.loads(rows[0]["project_context"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    gitignore_patterns = _parse_gitignore(project_path)
+    file_contents = _read_all_project_files(project_path, gitignore_patterns)
+
+    err, all_suggestions = db.read(
+        "suggestions",
+        "SELECT suggestion_description, line_no_from, line_no_to, old_lines, "
+        "replace_by, agent_id, batch_id, suggestion_state FROM {table} "
+        "ORDER BY created_at ASC",
+    )
+    if err:
+        all_suggestions = []
+
+    output_parts = []
+
+    output_parts.append("PROJECT_CONTEXT:")
+    output_parts.append(json.dumps(project_context, indent=2, ensure_ascii=False))
+    output_parts.append("")
+
+    output_parts.append("PROJECT_FILE_CONTENT:")
+    output_parts.append(json.dumps(list(file_contents.keys()), indent=2, ensure_ascii=False))
+    output_parts.append("")
+
+    for fname, content in sorted(file_contents.items()):
+        output_parts.append(f"FILE_NAME: {fname}")
+        output_parts.append(content)
+        output_parts.append("")
+
+    output_parts.append("PREVIOUS_SUGGESTIONS:")
+    output_parts.append(json.dumps(all_suggestions, indent=2, ensure_ascii=False, default=str))
+
+    return "\n".join(output_parts)
 
 
 def _create_project_local_db(folder_path: str, project_id: str, project_name: str,
@@ -714,6 +840,8 @@ def refactor(req: RefactorRequest):
     if not agent_config:
         raise HTTPException(status_code=400, detail="Invalid agent_id")
 
+    # ReTake Project Context
+    
     if agent_config.get("config_key") == "CodingStandardsAgent":
         return _run_coding_standards_flow(req.project_id, req.filename)
 
