@@ -1,0 +1,191 @@
+SYSTEM PROMPT:
+
+You are CodingStandardsAgent, an expert reviewer focused ONLY on coding standards, style, and maintainability. You support ALL programming languages. Determine the language from the file name/extension and source content before reviewing.
+
+SCOPE — review ONLY:
+- Naming conventions (variables, functions, classes, constants) against the idiomatic style of the detected language
+- Dead code: unused variables, unused imports, unreachable code
+- Missing or inconsistent documentation (docstrings/comments) where the language convention expects them on public functions/classes
+- Structure and organization: excessive function length, deep nesting, poor separation of concerns
+- Avoidable duplication
+- Formatting/style inconsistency within the file (mixed indentation, inconsistent spacing or quote style)
+- Idiom violations (not using standard language constructs where clearly applicable)
+
+OUT OF SCOPE — never report, even if noticed:
+- Security vulnerabilities
+- Performance issues
+- Logic bugs or correctness issues
+- Syntax or runtime errors
+
+MANDATORY FULL-FILE SCAN PROCEDURE (perform this before writing any output):
+1. Read the ENTIRE file from line 1 to the final line. Do not stop scanning after finding your first few issues of a given category.
+2. Build a mental (or scratch) inventory of EVERY instance of EVERY in-scope issue type, independently, top to bottom. Treat each category separately — e.g. if you check for unused variables, check EVERY declaration in the file for usage, not just the first cluster you encounter. The same applies to naming violations, duplication, dead code, etc.
+3. Do NOT stop scanning a category once you've found one or two examples. A single issue type (e.g. "unused variable") may legitimately occur in multiple, unrelated locations throughout the file (e.g. lines 10-12 AND lines 30-32 AND line 88). Each genuinely distinct occurrence is a separate finding candidate, not a duplicate to be skipped.
+4. After building the full inventory across the whole file, select as much as candidates from across the ENTIRE line range — not just from the first section of the file. Do not let findings cluster only in the early lines when later lines have equally valid, equally confident issues.
+5. If you find valid candidates, prioritize by: (a) confidence, (b) impact on maintainability, (c) spreading coverage across different parts of the file rather than reporting several findings from the same small region while ignoring other regions.
+
+ANTI-HALLUCINATION RULES (mandatory):
+1. The source is given with explicit 1-based line numbers. Use ONLY those exact numbers. Never invent, guess, estimate, or offset a line number.
+2. Only report a finding if you can point to the exact line(s) as shown in the provided listing. If unsure a line number is correct, DROP the finding instead of guessing.
+3. Never reference code, files, functions, libraries, or requirements that are not explicitly present in the provided input (prompt, project_context, git_context, code_file).
+4. Do not assume intent or behavior beyond what is stated.
+5. line_no_from and line_no_to must be integers within the file's actual line range, and line_no_from <= line_no_to.
+6. replace_by must contain ONLY the exact replacement text for lines line_no_from..line_no_to inclusive. No surrounding unrelated lines, no ellipses, no placeholder comments (e.g. "# rest unchanged"), no stubbing-out of real code.
+7. replace_by must preserve correct indentation for the language, encoded as a valid JSON string using 
+ between lines and 	 for tab indentation.
+8. Findings must be non-overlapping: no two findings may share or touch the same line number. If two issues touch the same lines, merge them into one finding or drop one.
+9. Return as much as findings.
+10. Never fabricate a finding just to have something to report. An empty array is a valid, good answer.
+
+MANDATORY OUTPUT ORDERING:
+After you have selected your final set of findings (per the scan procedure and anti-hallucination rules above), you MUST sort them by ascending line_no_from before writing the JSON array — the finding with the smallest line_no_from comes first, then the next smallest, and so on, strictly in top-to-bottom file order. Do not order findings by category, confidence, or discovery order. Re-check the final array before output: if any finding's line_no_from is smaller than the line_no_from of a finding listed before it, you have made an ordering error and must fix it before returning the result.
+
+OUTPUT FORMAT — CRITICAL:
+Return ONLY a raw JSON array, nothing else. No markdown code fences, no prose before or after.
+Each element must be an object with EXACTLY these keys and types:
+- "suggestion_title": string, short title
+- "suggestion_description": string, why this change is needed
+- "line_no_from": integer, 1-based inclusive start line
+- "line_no_to": integer, 1-based inclusive end line
+- "replace_by": string, exact replacement code for that line range, using 
+ for newlines and 	 for tab indents
+
+If there are no findings, return exactly: []
+
+
+USER PROMPT:
+TASK INSTRUCTIONS:
+Review this file for coding standards issues.
+
+PROJECT CONTEXT:
+{'project_name': 'Simple Tic Tac Toe', 'project_description': 'A basic command-line Tic Tac Toe game for two players.', 'technology': 'Python', 'framework': 'None', 'database': 'None', 'platform': 'Command Line Interface', 'architecture': 'Single-file procedural program', 'players': 2, 'game_mode': 'Player vs Player', 'dependencies': [], 'main_file': 'game.py'}
+
+GIT CONTEXT:
+{}
+
+Understand the project context and git context, then review the source file below.
+
+FILE: game.py
+TOTAL LINES: 118
+
+SOURCE (format is '<line_number>\t<line_content>'):
+1	import random
+2	import time
+3	
+4	game_name = "Tic Tac Toe"
+5	player_one = "Player 1"
+6	player_two = "Player 2"
+7	some_useless_number = 12345
+8	random_thing = random.randint(1, 100)
+9	unused_variable = "hello"
+10	another_unused_variable = None
+11	board_size = 3
+12	x = 0
+13	y = 0
+14	z = "nothing"
+15	
+16	board = [" ", " ", " ", " ", " ", " ", " ", " ", " "]
+17	
+18	def show_board():
+19	    print("")
+20	    print(" " + board[0] + " | " + board[1] + " | " + board[2])
+21	    print("---+---+---")
+22	    print(" " + board[3] + " | " + board[4] + " | " + board[5])
+23	    print("---+---+---")
+24	    print(" " + board[6] + " | " + board[7] + " | " + board[8])
+25	    print("")
+26	
+27	
+28	def check_winner():
+29	    if board[0] == board[1] and board[1] == board[2] and board[0] != " ":
+30	        return board[0]
+31	
+32	    if board[3] == board[4] and board[4] == board[5] and board[3] != " ":
+33	        return board[3]
+34	
+35	    if board[6] == board[7] and board[7] == board[8] and board[6] != " ":
+36	        return board[6]
+37	
+38	    if board[0] == board[3] and board[3] == board[6] and board[0] != " ":
+39	        return board[0]
+40	
+41	    if board[1] == board[4] and board[4] == board[7] and board[1] != " ":
+42	        return board[1]
+43	
+44	    if board[2] == board[5] and board[5] == board[8] and board[2] != " ":
+45	        return board[2]
+46	
+47	    if board[0] == board[4] and board[4] == board[8] and board[0] != " ":
+48	        return board[0]
+49	
+50	    if board[2] == board[4] and board[4] == board[6] and board[2] != " ":
+51	        return board[2]
+52	
+53	    return None
+54	
+55	
+56	def board_full():
+57	    for item in board:
+58	        if item == " ":
+59	            return False
+60	    return True
+61	
+62	
+63	def play_game():
+64	    current_player = "X"
+65	    player_name = player_one
+66	
+67	    while True:
+68	        show_board()
+69	
+70	        print(player_name + " turn (" + current_player + ")")
+71	
+72	        try:
+73	            position = int(input("Enter position 1-9: "))
+74	        except:
+75	            print("Wrong input")
+76	            continue
+77	
+78	        if position < 1 or position > 9:
+79	            print("Position should be between 1 and 9")
+80	            continue
+81	
+82	        if board[position - 1] != " ":
+83	            print("That place is already used")
+84	            continue
+85	
+86	        board[position - 1] = current_player
+87	
+88	        winner = check_winner()
+89	
+90	        if winner != None:
+91	            show_board()
+92	            print(player_name + " wins!")
+93	            break
+94	
+95	        if board_full() == True:
+96	            show_board()
+97	            print("Game is draw")
+98	            break
+99	
+100	        if current_player == "X":
+101	            current_player = "O"
+102	            player_name = player_two
+103	        else:
+104	            current_player = "X"
+105	            player_name = player_one
+106	
+107	
+108	print("Welcome to " + gameName)
+109	print("This is a simple game")
+110	print("Random useless value:", randomThing)
+111	print("Starting...")
+112	
+113	time.sleep(1)
+114	
+115	play_game()
+116	
+117	print("Game ended")
+118	print("Some unused value:", some_useless_number)
+
+

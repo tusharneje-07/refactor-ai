@@ -536,7 +536,7 @@ def _get_agent_config_by_id(agent_id: str) -> Optional[dict]:
     return None
 
 
-def _run_coding_standards_flow(project_id: str, filename: str):
+def _run_coding_standards_flow(project_id: str, filename: str, project_context: dict):
     if not STATE_FILE.is_file():
         raise HTTPException(status_code=400, detail="No active project. Call /open-project first.")
 
@@ -563,198 +563,198 @@ def _run_coding_standards_flow(project_id: str, filename: str):
         "lines": file_content["lines"],
     }
 
-    project_context = {
-        "project_name": state["project_name"],
-    }
+    # If We Set This True in .env, then it will use the project_context passed to the function, otherwise it will try to read from the local DB
+    if os.environ.get("COMPLETE_PROJECT_CONTEXT", "false").lower() in ("true", "1", "yes"):
+        project_context = project_context
+    else:
+        local_db_path = os.path.join(project_path, ".airefactor.db")
+        if os.path.isfile(local_db_path):
+            local_db = SQLiteDB(local_db_path)
+            err, rows = local_db.read(
+                "project_info",
+                "SELECT project_context FROM {table} WHERE project_id = ?",
+                params=(state["project_id"],),
+            )
+            if not err and rows and rows[0].get("project_context"):
+                try:
+                    project_context = json.loads(rows[0]["project_context"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-    local_db_path = os.path.join(project_path, ".airefactor.db")
-    if os.path.isfile(local_db_path):
-        local_db = SQLiteDB(local_db_path)
-        err, rows = local_db.read(
-            "project_info",
-            "SELECT project_context FROM {table} WHERE project_id = ?",
-            params=(state["project_id"],),
-        )
-        if not err and rows and rows[0].get("project_context"):
-            try:
-                project_context = json.loads(rows[0]["project_context"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-    # result = run_coding_standards_agent(
-    #     prompt="Review this file for coding standards issues.",
-    #     project_context=project_context,
-    #     git_context={},
-    #     code_file=code_file,
-    #     api_key=str(os.getenv("GROQ_API_KEY")),
-    # )
+    result = run_coding_standards_agent(
+        prompt="Review this file for coding standards issues.",
+        project_context=project_context,
+        git_context={},
+        code_file=code_file,
+        api_key=str(os.getenv("GROQ_API_KEY")),
+    )
 
     # [DEV] Simulation of coding standards agent response for testing purposes
-    result = {
-        "success": true,
-        "agent": "CodingStandardsAgent",
-        "suggestions": [
-            {
-            "suggestion_title": "Rename variable to snake_case",
-            "suggestion_description": "Variable 'randomThing' should follow snake_case naming convention.",
-            "line_no_from": 8,
-            "line_no_to": 8,
-            "replace_by": "random_thing = random.randint(1, 100)",
-            "suggestion_id": "2501c051e2bbcd24478e39b11df5cc3ba6004fd27e7ed630f31b63ad0f51cfe4",
-            "old_lines": "randomThing = random.randint(1, 100)",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Remove unused variable",
-            "suggestion_description": "'unused_variable' is never used.",
-            "line_no_from": 9,
-            "line_no_to": 9,
-            "replace_by": "",
-            "suggestion_id": "9a3d0920c69c9712dc8d405a38e984a8ca3c38416ff7954982699bef584d8788",
-            "old_lines": "unused_variable = \"hello\"",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Remove unused variable",
-            "suggestion_description": "'another_unused_variable' is never used.",
-            "line_no_from": 10,
-            "line_no_to": 10,
-            "replace_by": "",
-            "suggestion_id": "4abbd7b51ea602299f0b09508f3ff65494ffd45725a659f314aeaafc9143d641",
-            "old_lines": "another_unused_variable = None",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Remove unused variable",
-            "suggestion_description": "'board_size' is never used.",
-            "line_no_from": 11,
-            "line_no_to": 11,
-            "replace_by": "",
-            "suggestion_id": "4023012bd85edffb2fc3dfd054daf5dcea7e038582b5f443c0b6f9ad16c4184e",
-            "old_lines": "board_size = 3",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Remove dead code",
-            "suggestion_description": "Variables 'x', 'y', and 'z' are never used.",
-            "line_no_from": 12,
-            "line_no_to": 14,
-            "replace_by": "",
-            "suggestion_id": "5939cac144242287c829b12c8a10a3466207c7cc3c4b682efa95e4d0ab01f996",
-            "old_lines": "x = 0\ny = 0\nz = \"nothing\"",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Add docstring to show_board",
-            "suggestion_description": "Public function should have a docstring describing its purpose.",
-            "line_no_from": 18,
-            "line_no_to": 18,
-            "replace_by": "def show_board():\n    \"\"\"Display the current game board.\"\"\"",
-            "suggestion_id": "38a8d665f1d4690098ecf0bcfab79f810fa39d0c6e02456a8ba5a85e7802e511",
-            "old_lines": "def show_board():",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Add docstring to check_winner",
-            "suggestion_description": "Public function should have a docstring describing its purpose.",
-            "line_no_from": 28,
-            "line_no_to": 28,
-            "replace_by": "def check_winner():\n    \"\"\"Check the board for a winner and return the winning symbol, or None.\"\"\"",
-            "suggestion_id": "3f5cb5b84ed892d47f0072c07c5e1926e67319d2c039e27e217a64e55e7aae19",
-            "old_lines": "def check_winner():",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Add docstring to board_full",
-            "suggestion_description": "Public function should have a docstring describing its purpose.",
-            "line_no_from": 56,
-            "line_no_to": 56,
-            "replace_by": "def board_full():\n    \"\"\"Return True if the board has no empty spaces, otherwise False.\"\"\"",
-            "suggestion_id": "0cf5001668aa8ceb8a074ec5baa647f67fd3059575968807c9a95ab0ed03ac7f",
-            "old_lines": "def board_full():",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Add docstring to play_game",
-            "suggestion_description": "Public function should have a docstring describing its purpose.",
-            "line_no_from": 63,
-            "line_no_to": 63,
-            "replace_by": "def play_game():\n    \"\"\"Main game loop handling player turns and game outcome.\"\"\"",
-            "suggestion_id": "6d86ee452c3cf9d6d69c1dae65c9b73de77a62fdfae1c9eb78cbbed2b3215405",
-            "old_lines": "def play_game():",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Use f-string for player turn message",
-            "suggestion_description": "String concatenation should be replaced with an f-string for readability.",
-            "line_no_from": 70,
-            "line_no_to": 70,
-            "replace_by": "print(f\"{player_name} turn ({current_player})\")",
-            "suggestion_id": "faf089552243da8b8cc7f82170ae21cfc987e68d44117bf5d60af668f05d0660",
-            "old_lines": "        print(player_name + \" turn (\" + current_player + \")\")",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Use 'is not None' comparison",
-            "suggestion_description": "Comparison to None should use 'is not None' for idiomatic Python.",
-            "line_no_from": 90,
-            "line_no_to": 90,
-            "replace_by": "if winner is not None:",
-            "suggestion_id": "872a24d73db71b73f3fab682dfa92e3d9299aa790262f94678c6744988f27361",
-            "old_lines": "        if winner != None:",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Simplify boolean check",
-            "suggestion_description": "Comparing a boolean expression to True is unnecessary.",
-            "line_no_from": 95,
-            "line_no_to": 95,
-            "replace_by": "if board_full():",
-            "suggestion_id": "31179374f88f3c7699c8efb49b077d8239d0d1c5d613c3452a11ff3b000b21d8",
-            "old_lines": "        if board_full() == True:",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Fix variable name and use f-string",
-            "suggestion_description": "'gameName' does not follow naming conventions and is undefined; replace with 'game_name' using an f-string.",
-            "line_no_from": 108,
-            "line_no_to": 108,
-            "replace_by": "print(f\"Welcome to {game_name}\")",
-            "suggestion_id": "84c2b499ec24afdb080c4c79c6a8f08f2cabc960b0570a2399032316a6822c89",
-            "old_lines": "print(\"Welcome to \" + gameName)",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            },
-            {
-            "suggestion_title": "Update variable name and use f-string",
-            "suggestion_description": "'randomThing' should be renamed to 'random_thing' and printed using an f-string.",
-            "line_no_from": 110,
-            "line_no_to": 110,
-            "replace_by": "print(f\"Random useless value: {random_thing}\")",
-            "suggestion_id": "7e8e2569f850a7edbe943d631bf5527b9a82f4f69ab0e40c30960d2b6c7f3262",
-            "old_lines": "print(\"Random useless value:\", randomThing)",
-            "suggestion_state": "pending",
-            "batch_id": "75b029c97b2a32bc620123c036489db7"
-            }
-        ],
-        "model": "openai/gpt-oss-120b",
-        "error": {
-            "type": "",
-            "message": ""
-        }
-        }
+    # result = {
+    #     "success": true,
+    #     "agent": "CodingStandardsAgent",
+    #     "suggestions": [
+    #         {
+    #         "suggestion_title": "Rename variable to snake_case",
+    #         "suggestion_description": "Variable 'randomThing' should follow snake_case naming convention.",
+    #         "line_no_from": 8,
+    #         "line_no_to": 8,
+    #         "replace_by": "random_thing = random.randint(1, 100)",
+    #         "suggestion_id": "2501c051e2bbcd24478e39b11df5cc3ba6004fd27e7ed630f31b63ad0f51cfe4",
+    #         "old_lines": "randomThing = random.randint(1, 100)",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Remove unused variable",
+    #         "suggestion_description": "'unused_variable' is never used.",
+    #         "line_no_from": 9,
+    #         "line_no_to": 9,
+    #         "replace_by": "",
+    #         "suggestion_id": "9a3d0920c69c9712dc8d405a38e984a8ca3c38416ff7954982699bef584d8788",
+    #         "old_lines": "unused_variable = \"hello\"",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Remove unused variable",
+    #         "suggestion_description": "'another_unused_variable' is never used.",
+    #         "line_no_from": 10,
+    #         "line_no_to": 10,
+    #         "replace_by": "",
+    #         "suggestion_id": "4abbd7b51ea602299f0b09508f3ff65494ffd45725a659f314aeaafc9143d641",
+    #         "old_lines": "another_unused_variable = None",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Remove unused variable",
+    #         "suggestion_description": "'board_size' is never used.",
+    #         "line_no_from": 11,
+    #         "line_no_to": 11,
+    #         "replace_by": "",
+    #         "suggestion_id": "4023012bd85edffb2fc3dfd054daf5dcea7e038582b5f443c0b6f9ad16c4184e",
+    #         "old_lines": "board_size = 3",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Remove dead code",
+    #         "suggestion_description": "Variables 'x', 'y', and 'z' are never used.",
+    #         "line_no_from": 12,
+    #         "line_no_to": 14,
+    #         "replace_by": "",
+    #         "suggestion_id": "5939cac144242287c829b12c8a10a3466207c7cc3c4b682efa95e4d0ab01f996",
+    #         "old_lines": "x = 0\ny = 0\nz = \"nothing\"",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Add docstring to show_board",
+    #         "suggestion_description": "Public function should have a docstring describing its purpose.",
+    #         "line_no_from": 18,
+    #         "line_no_to": 18,
+    #         "replace_by": "def show_board():\n    \"\"\"Display the current game board.\"\"\"",
+    #         "suggestion_id": "38a8d665f1d4690098ecf0bcfab79f810fa39d0c6e02456a8ba5a85e7802e511",
+    #         "old_lines": "def show_board():",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Add docstring to check_winner",
+    #         "suggestion_description": "Public function should have a docstring describing its purpose.",
+    #         "line_no_from": 28,
+    #         "line_no_to": 28,
+    #         "replace_by": "def check_winner():\n    \"\"\"Check the board for a winner and return the winning symbol, or None.\"\"\"",
+    #         "suggestion_id": "3f5cb5b84ed892d47f0072c07c5e1926e67319d2c039e27e217a64e55e7aae19",
+    #         "old_lines": "def check_winner():",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Add docstring to board_full",
+    #         "suggestion_description": "Public function should have a docstring describing its purpose.",
+    #         "line_no_from": 56,
+    #         "line_no_to": 56,
+    #         "replace_by": "def board_full():\n    \"\"\"Return True if the board has no empty spaces, otherwise False.\"\"\"",
+    #         "suggestion_id": "0cf5001668aa8ceb8a074ec5baa647f67fd3059575968807c9a95ab0ed03ac7f",
+    #         "old_lines": "def board_full():",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Add docstring to play_game",
+    #         "suggestion_description": "Public function should have a docstring describing its purpose.",
+    #         "line_no_from": 63,
+    #         "line_no_to": 63,
+    #         "replace_by": "def play_game():\n    \"\"\"Main game loop handling player turns and game outcome.\"\"\"",
+    #         "suggestion_id": "6d86ee452c3cf9d6d69c1dae65c9b73de77a62fdfae1c9eb78cbbed2b3215405",
+    #         "old_lines": "def play_game():",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Use f-string for player turn message",
+    #         "suggestion_description": "String concatenation should be replaced with an f-string for readability.",
+    #         "line_no_from": 70,
+    #         "line_no_to": 70,
+    #         "replace_by": "print(f\"{player_name} turn ({current_player})\")",
+    #         "suggestion_id": "faf089552243da8b8cc7f82170ae21cfc987e68d44117bf5d60af668f05d0660",
+    #         "old_lines": "        print(player_name + \" turn (\" + current_player + \")\")",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Use 'is not None' comparison",
+    #         "suggestion_description": "Comparison to None should use 'is not None' for idiomatic Python.",
+    #         "line_no_from": 90,
+    #         "line_no_to": 90,
+    #         "replace_by": "if winner is not None:",
+    #         "suggestion_id": "872a24d73db71b73f3fab682dfa92e3d9299aa790262f94678c6744988f27361",
+    #         "old_lines": "        if winner != None:",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Simplify boolean check",
+    #         "suggestion_description": "Comparing a boolean expression to True is unnecessary.",
+    #         "line_no_from": 95,
+    #         "line_no_to": 95,
+    #         "replace_by": "if board_full():",
+    #         "suggestion_id": "31179374f88f3c7699c8efb49b077d8239d0d1c5d613c3452a11ff3b000b21d8",
+    #         "old_lines": "        if board_full() == True:",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Fix variable name and use f-string",
+    #         "suggestion_description": "'gameName' does not follow naming conventions and is undefined; replace with 'game_name' using an f-string.",
+    #         "line_no_from": 108,
+    #         "line_no_to": 108,
+    #         "replace_by": "print(f\"Welcome to {game_name}\")",
+    #         "suggestion_id": "84c2b499ec24afdb080c4c79c6a8f08f2cabc960b0570a2399032316a6822c89",
+    #         "old_lines": "print(\"Welcome to \" + gameName)",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         },
+    #         {
+    #         "suggestion_title": "Update variable name and use f-string",
+    #         "suggestion_description": "'randomThing' should be renamed to 'random_thing' and printed using an f-string.",
+    #         "line_no_from": 110,
+    #         "line_no_to": 110,
+    #         "replace_by": "print(f\"Random useless value: {random_thing}\")",
+    #         "suggestion_id": "7e8e2569f850a7edbe943d631bf5527b9a82f4f69ab0e40c30960d2b6c7f3262",
+    #         "old_lines": "print(\"Random useless value:\", randomThing)",
+    #         "suggestion_state": "pending",
+    #         "batch_id": "75b029c97b2a32bc620123c036489db7"
+    #         }
+    #     ],
+    #     "model": "openai/gpt-oss-120b",
+    #     "error": {
+    #         "type": "",
+    #         "message": ""
+    #     }
+    #     }
 
     err_type = (result.get("error") or {}).get("type", "")
 
@@ -828,7 +828,7 @@ class CodingStandardsResponse(BaseModel):
     },
 )
 def dev_coding_standards_agent(req: CodingStandardsRequest):
-    return _run_coding_standards_flow(req.project_id, req.filename)
+    return _run_coding_standards_flow(req.project_id, req.filename, _build_project_context_for_agent(req.project_id))
 
 
 @app.post(
@@ -838,7 +838,7 @@ def dev_coding_standards_agent(req: CodingStandardsRequest):
         "Analyzes the specified file in the active project and returns suggestions "
         "from the requested agent after validating the agent_id against model_config.json."
     ),
-    # response_model=RefactorResponse,
+    response_model=RefactorResponse,
     status_code=200,
     responses={
         400: {"description": "Invalid agent_id or active project mismatch"},
@@ -851,16 +851,12 @@ def refactor(req: RefactorRequest):
     if not agent_config:
         raise HTTPException(status_code=400, detail="Invalid agent_id")
 
-    project_context = _build_project_context_for_agent(req.project_id)
-    
-    with open(BASE_DIR / "test_project_context.text", "w") as f:
-        f.write(project_context)
-
-    return {"success": True, "agent": agent_config.get("config_key"), "project_context": project_context}
-    
+    project_context = {}
+    if os.environ.get("COMPLETE_PROJECT_CONTEXT", "false").lower() in ("true", "1", "yes"):
+        project_context = _build_project_context_for_agent(req.project_id)
     
     if agent_config.get("config_key") == "CodingStandardsAgent":
-        return _run_coding_standards_flow(req.project_id, req.filename)
+        return _run_coding_standards_flow(req.project_id, req.filename,project_context)
 
     raise HTTPException(status_code=400, detail="Unsupported agent_id")
 

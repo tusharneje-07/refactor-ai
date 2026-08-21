@@ -162,8 +162,9 @@ def _build_user_message(
 
     return (
         f"TASK INSTRUCTIONS:\n{prompt}\n\n"
-        f"PROJECT CONTEXT:\n{json.dumps(project_context, indent=2)}\n\n"
+        f"PROJECT CONTEXT:\n{project_context}\n\n"
         f"GIT CONTEXT:\n{json.dumps(git_context, indent=2)}\n\n"
+        f"Understand the project context and git context, then review the source file below.\n\n"
         f"FILE: {filename}\n"
         f"TOTAL LINES: {total_lines}\n\n"
         f"SOURCE (format is '<line_number>\\t<line_content>'):\n"
@@ -322,11 +323,16 @@ def run_coding_standards_agent(
         provider_name = config_entry.get("provider")
         
         client = LLMClient(provider=provider_name, api_key=api_key, model=model_name)
+        
         system_prompt = SYSTEM_PROMPT
         user_prompt = _build_user_message(prompt, project_context, git_context, code_file)
         
+        with open(f"{_BACKEND_ROOT}/debug/debug_coding_standards_agent_input.txt", "w") as f:
+            f.write(f"SYSTEM PROMPT:\n{system_prompt}\n\n")
+            f.write(f"USER PROMPT:\n{user_prompt}\n\n")
+        
         client_response = client.generate(system=system_prompt, user=user_prompt)
-        print(f"Client response: {client_response}")  # Debugging line
+        
         if not client_response.get("success"):
             return {
                 "success": False,
