@@ -1,23 +1,23 @@
 """
-agents/CodingStandardsAgent.py
+agents/AgentCommunication.py
 
-CodingStandardsAgent
----------------------
-Reviews a single source file (any programming language) and returns
-low-risk, non-overlapping coding-standards suggestions as strict JSON.
-
-Scope: naming conventions, dead code, structure/complexity, missing
-docs, duplication, formatting/idiom consistency.
-Out of scope: security, performance, logic/runtime bugs.
+AgentCommunication
+------------------
+Single shared communication layer for ALL agents. Instead of one file per
+agent, every agent's configuration (system prompt, model, provider and
+user_prompt_sections) lives in agent_config.json. This module fetches the
+config entry for the requested agent, builds the system/user prompts and
+calls the LLM through modules/llm_client.py.
 
 Depends on:
     modules/llm_client.py   (LLMClient)
-    model_config.json       (backend root, sibling of agents/ and modules/)
+    agent_config.json       (backend root, sibling of agents/ and modules/)
 
 Usage:
-    from agents.CodingStandardsAgent import run_coding_standards_agent
+    from agent.AgentCommunication import run_agent
 
-    result = run_coding_standards_agent(
+    result = run_agent(
+        agent_name="CodingStandardsAgent",
         prompt="Review this file for coding standards issues.",
         project_context={...},
         git_context={},
@@ -34,7 +34,7 @@ from typing import Any, Dict
 
 # ---------------------------------------------------------------------------
 # Path setup — allow running this file both as part of the `agents` package
-# and standalone, and resolve modules/llm_client.py + model_config.json
+# and standalone, and resolve modules/llm_client.py + agent_config.json
 # relative to the backend root (parent of this file's directory).
 # ---------------------------------------------------------------------------
 
@@ -47,8 +47,7 @@ if _BACKEND_ROOT not in sys.path:
 from modules.llm_client import LLMClient
 
 
-AGENT_NAME = "CodingStandardsAgent"
-MODEL_CONFIG_PATH = os.path.join(_BACKEND_ROOT, "model_config.json")
+AGENT_CONFIG_PATH = os.path.join(_BACKEND_ROOT, "agent_config.json")
 MAX_RETRIES_ON_INVALID_JSON = 1
 
 REQUIRED_KEYS = {
@@ -60,74 +59,22 @@ REQUIRED_KEYS = {
 }
 
 
-SYSTEM_PROMPT = """
-You are CodingStandardsAgent, an expert reviewer focused ONLY on coding standards, style, and maintainability. You support ALL programming languages. Determine the language from the file name/extension and source content before reviewing.
-
-SCOPE — review ONLY:
-- Naming conventions (variables, functions, classes, constants) against the idiomatic style of the detected language
-- Dead code: unused variables, unused imports, unreachable code
-- Missing or inconsistent documentation (docstrings/comments) where the language convention expects them on public functions/classes
-- Structure and organization: excessive function length, deep nesting, poor separation of concerns
-- Avoidable duplication
-- Formatting/style inconsistency within the file (mixed indentation, inconsistent spacing or quote style)
-- Idiom violations (not using standard language constructs where clearly applicable)
-
-OUT OF SCOPE — never report, even if noticed:
-- Security vulnerabilities
-- Performance issues
-- Logic bugs or correctness issues
-- Syntax or runtime errors
-
-MANDATORY FULL-FILE SCAN PROCEDURE (perform this before writing any output):
-1. Read the ENTIRE file from line 1 to the final line. Do not stop scanning after finding your first few issues of a given category.
-2. Build a mental (or scratch) inventory of EVERY instance of EVERY in-scope issue type, independently, top to bottom. Treat each category separately — e.g. if you check for unused variables, check EVERY declaration in the file for usage, not just the first cluster you encounter. The same applies to naming violations, duplication, dead code, etc.
-3. Do NOT stop scanning a category once you've found one or two examples. A single issue type (e.g. "unused variable") may legitimately occur in multiple, unrelated locations throughout the file (e.g. lines 10-12 AND lines 30-32 AND line 88). Each genuinely distinct occurrence is a separate finding candidate, not a duplicate to be skipped.
-4. After building the full inventory across the whole file, select as much as candidates from across the ENTIRE line range — not just from the first section of the file. Do not let findings cluster only in the early lines when later lines have equally valid, equally confident issues.
-5. If you find valid candidates, prioritize by: (a) confidence, (b) impact on maintainability, (c) spreading coverage across different parts of the file rather than reporting several findings from the same small region while ignoring other regions.
-
-ANTI-HALLUCINATION RULES (mandatory):
-1. The source is given with explicit 1-based line numbers. Use ONLY those exact numbers. Never invent, guess, estimate, or offset a line number.
-2. Only report a finding if you can point to the exact line(s) as shown in the provided listing. If unsure a line number is correct, DROP the finding instead of guessing.
-3. Never reference code, files, functions, libraries, or requirements that are not explicitly present in the provided input (prompt, project_context, git_context, code_file).
-4. Do not assume intent or behavior beyond what is stated.
-5. line_no_from and line_no_to must be integers within the file's actual line range, and line_no_from <= line_no_to.
-6. replace_by must contain ONLY the exact replacement text for lines line_no_from..line_no_to inclusive. No surrounding unrelated lines, no ellipses, no placeholder comments (e.g. "# rest unchanged"), no stubbing-out of real code.
-7. replace_by must preserve correct indentation for the language, encoded as a valid JSON string using \n between lines and \t for tab indentation.
-8. Findings must be non-overlapping: no two findings may share or touch the same line number. If two issues touch the same lines, merge them into one finding or drop one.
-9. Return as much as findings.
-10. Never fabricate a finding just to have something to report. An empty array is a valid, good answer.
-
-MANDATORY OUTPUT ORDERING:
-After you have selected your final set of findings (per the scan procedure and anti-hallucination rules above), you MUST sort them by ascending line_no_from before writing the JSON array — the finding with the smallest line_no_from comes first, then the next smallest, and so on, strictly in top-to-bottom file order. Do not order findings by category, confidence, or discovery order. Re-check the final array before output: if any finding's line_no_from is smaller than the line_no_from of a finding listed before it, you have made an ordering error and must fix it before returning the result.
-
-OUTPUT FORMAT — CRITICAL:
-Return ONLY a raw JSON array, nothing else. No markdown code fences, no prose before or after.
-Each element must be an object with EXACTLY these keys and types:
-- "suggestion_title": string, short title
-- "suggestion_description": string, why this change is needed
-- "line_no_from": integer, 1-based inclusive start line
-- "line_no_to": integer, 1-based inclusive end line
-- "replace_by": string, exact replacement code for that line range, using \n for newlines and \t for tab indents
-
-If there are no findings, return exactly: []
-"""
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_model_config(agent_name: str = AGENT_NAME) -> Dict[str, Any]:
-    """Load this agent's entry from model_config.json."""
-    with open(MODEL_CONFIG_PATH, "r", encoding="utf-8") as f:
+def _load_agent_config(agent_name: str) -> Dict[str, Any]:
+    """Load the given agent's entry from agent_config.json."""
+    with open(AGENT_CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
 
     entry = config.get(agent_name)
     if not entry:
         raise ValueError(
-            f"No config entry for '{agent_name}' found in {MODEL_CONFIG_PATH}"
+            f"No config entry for '{agent_name}' found in {AGENT_CONFIG_PATH}"
         )
     return entry
+
 
 def _numbered_source(code_file: Dict[str, Any]) -> str:
     """
@@ -151,25 +98,47 @@ def _numbered_source(code_file: Dict[str, Any]) -> str:
 
 
 def _build_user_message(
+    sections: list,
     prompt: str,
     project_context: Dict[str, Any],
     git_context: Dict[str, Any],
     code_file: Dict[str, Any],
 ) -> str:
+    """
+    Build the user message from the `user_prompt_sections` list defined in
+    agent_config.json. Only sections listed there are included.
+
+    Known section tokens:
+        "<instruction>"     -> the prompt/task instructions
+        "<project_context>" -> project context dict
+        "<git_context>"     -> git context dict
+        "<code_file>"       -> the numbered source file listing
+    Any other string is treated as a custom message and included verbatim.
+    """
     filename = code_file.get("filename", "unknown")
     total_lines = code_file.get("total_lines", len(code_file.get("lines", {})))
-    source_listing = _numbered_source(code_file)
 
-    return (
-        f"TASK INSTRUCTIONS:\n{prompt}\n\n"
-        f"PROJECT CONTEXT:\n{project_context}\n\n"
-        f"GIT CONTEXT:\n{json.dumps(git_context, indent=2)}\n\n"
-        f"Understand the project context and git context, then review the source file below.\n\n"
-        f"FILE: {filename}\n"
-        f"TOTAL LINES: {total_lines}\n\n"
-        f"SOURCE (format is '<line_number>\\t<line_content>'):\n"
-        f"{source_listing}\n"
-    )
+    parts = []
+    for section in sections:
+        if section == "<instruction>":
+            parts.append(f"TASK INSTRUCTIONS:\n{prompt}")
+        elif section == "<project_context>":
+            parts.append(f"PROJECT CONTEXT:\n{json.dumps(project_context, indent=2)}")
+        elif section == "<git_context>":
+            parts.append(f"GIT CONTEXT:\n{json.dumps(git_context, indent=2)}")
+        elif section == "<code_file>":
+            source_listing = _numbered_source(code_file)
+            parts.append(
+                f"Understand the project context and git context, then review the source file below.\n\n"
+                f"FILE: {filename}\n"
+                f"TOTAL LINES: {total_lines}\n\n"
+                f"SOURCE (format is '<line_number>\\t<line_content>'):\n"
+                f"{source_listing}\n"
+            )
+        else:
+            parts.append(section)
+
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +247,8 @@ def _repair_json(text: str) -> str:
     return repaired
 
 
-def run_coding_standards_agent(
+def run_agent(
+    agent_name: str,
     prompt: str,
     project_context: Dict[str, Any],
     git_context: Dict[str, Any],
@@ -287,20 +257,21 @@ def run_coding_standards_agent(
     api_key: str = "",
 ) -> Dict[str, Any]:
     """
-    Execute CodingStandardsAgent on a single file.
+    Execute any configured agent on a single file.
 
     Args:
-        prompt: Task instructions passed to the agent.
+        agent_name: Config key in agent_config.json (e.g. "CodingStandardsAgent").
+        prompt: Task instructions passed to the agent (<instruction> section).
         project_context: Project metadata dict.
         git_context: Git-related metadata dict (may be empty).
         code_file: {"filename": str, "total_lines": int, "lines": {"1": "...", ...}}
-        model: Optional model name overriding model_config.json's configured model.
+        model: Optional model name overriding agent_config.json's configured model.
         api_key: Optional API key passed directly (e.g. from KeyPool).
 
     Returns:
         {
             "success": bool,
-            "agent": "CodingStandardsAgent",
+            "agent": str,
             "model": str,
             "suggestions": [ {suggestion_title, suggestion_description,
                                line_no_from, line_no_to, replace_by}, ... ],
@@ -310,7 +281,7 @@ def run_coding_standards_agent(
     if not isinstance(code_file, dict) or "lines" not in code_file:
         return {
             "success": False,
-            "agent": AGENT_NAME,
+            "agent": agent_name,
             "model": model,
             "suggestions": None,
             "error": {"type": "ValidationError", "message": "code_file must include a 'lines' map."},
@@ -318,25 +289,26 @@ def run_coding_standards_agent(
 
 
     try:
-        config_entry = _load_model_config()
+        config_entry = _load_agent_config(agent_name)
         model_name = model or config_entry.get("use_model")
         provider_name = config_entry.get("provider")
-        
+
         client = LLMClient(provider=provider_name, api_key=api_key, model=model_name)
-        
-        system_prompt = SYSTEM_PROMPT
-        user_prompt = _build_user_message(prompt, project_context, git_context, code_file)
-        
-        with open(f"{_BACKEND_ROOT}/debug/debug_coding_standards_agent_input.txt", "w") as f:
+
+        system_prompt = config_entry.get("system_prompt", "")
+        sections = config_entry.get("user_prompt_sections", ["<instruction>", "<code_file>"])
+        user_prompt = _build_user_message(sections, prompt, project_context, git_context, code_file)
+
+        with open(f"{_BACKEND_ROOT}/debug/debug_{agent_name}_input.txt", "w") as f:
             f.write(f"SYSTEM PROMPT:\n{system_prompt}\n\n")
             f.write(f"USER PROMPT:\n{user_prompt}\n\n")
-        
-        client_response = client.generate(system=system_prompt, user=user_prompt)
-        
+
+        client_response = client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+
         if not client_response.get("success"):
             return {
                 "success": False,
-                "agent": AGENT_NAME,
+                "agent": agent_name,
                 "model": model_name,
                 "suggestions": None,
                 "error": client_response.get("error", {"type": "UnknownError", "message": "Agent returned no output"}),
@@ -346,7 +318,7 @@ def run_coding_standards_agent(
         if not output or not output.strip():
             return {
                 "success": False,
-                "agent": AGENT_NAME,
+                "agent": agent_name,
                 "model": model_name,
                 "suggestions": None,
                 "error": {"type": "EmptyResponseError", "message": "Model returned empty output"},
@@ -365,7 +337,7 @@ def run_coding_standards_agent(
         for suggestion in parsed:
             if not isinstance(suggestion, dict):
                 continue
-            suggestion.setdefault("suggestion_id", hashlib.sha256(f"CodingStandardsAgent_{time.time() * 1000}_{len(final_suggestions)}".encode("utf-8")).hexdigest())
+            suggestion.setdefault("suggestion_id", hashlib.sha256(f"{agent_name}_{time.time() * 1000}_{len(final_suggestions)}".encode("utf-8")).hexdigest())
             suggestion.setdefault("suggestion_description", "")
             suggestion.setdefault("line_no_from", 0)
             suggestion.setdefault("line_no_to", 0)
@@ -383,14 +355,14 @@ def run_coding_standards_agent(
             final_suggestions.append(suggestion)
         return {
             "success": True,
-            "agent": AGENT_NAME,
+            "agent": agent_name,
             "model": model_name,
             "suggestions": final_suggestions,
         }
     except Exception as exc:
         return {
             "success": False,
-            "agent": AGENT_NAME,
+            "agent": agent_name,
             "model": model,
             "suggestions": None,
             "error": {"type": type(exc).__name__, "message": str(exc)},
@@ -410,7 +382,8 @@ if __name__ == "__main__":
         },
     }
 
-    output = run_coding_standards_agent(
+    output = run_agent(
+        agent_name="CodingStandardsAgent",
         prompt="Review this file for coding standards issues.",
         project_context={"project_name": "Simple Tic Tac Toe", "technology": "Python"},
         git_context={},

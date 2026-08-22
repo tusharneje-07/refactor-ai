@@ -127,25 +127,17 @@ class LLMClient:
 
     def generate(
         self,
-        prompt: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
         model: Optional[str] = None,
-        system: Optional[str] = None,
-        developer: Optional[str] = None,
-        user: Optional[str] = None,
-        assistant: Optional[str] = None,
-        tool: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send messages to the provider using the OpenAI-compatible API.
 
         Args:
-            prompt: Backward-compatible user prompt.
+            system_prompt: System-level instructions.
+            user_prompt: User message.
             model: Optional override for the model configured on this client.
-            system: System-level instructions.
-            developer: Application-level instructions.
-            user: User message.
-            assistant: Previous assistant response / conversation history.
-            tool: Output returned by a previously called tool.
 
         Returns:
             JSON-serializable dictionary containing the result.
@@ -155,42 +147,16 @@ class LLMClient:
 
         messages = []
 
-        if system is not None:
+        if system_prompt is not None:
             messages.append({
                 "role": "system",
-                "content": system,
+                "content": system_prompt,
             })
 
-        if developer is not None:
-            messages.append({
-                "role": "developer",
-                "content": developer,
-            })
-
-        if user is not None:
+        if user_prompt is not None:
             messages.append({
                 "role": "user",
-                "content": user,
-            })
-
-        if assistant is not None:
-            messages.append({
-                "role": "assistant",
-                "content": assistant,
-            })
-
-        if tool is not None:
-            messages.append({
-                "role": "tool",
-                "content": tool,
-            })
-
-        # Preserve existing behavior:
-        # If no explicit user message is supplied, use prompt.
-        if user is None:
-            messages.append({
-                "role": "user",
-                "content": prompt,
+                "content": user_prompt,
             })
 
         try:
@@ -310,13 +276,6 @@ class LLMClient:
     # Internal Helpers
     # -----------------------------------------------------------------
 
-    @staticmethod
-    def _validate_prompt(prompt: Any) -> Optional[str]:
-        if not isinstance(prompt, str) or not prompt.strip():
-            return "prompt must be a non-empty string."
-
-        return None
-
     def _success(
         self,
         model: str,
@@ -356,25 +315,13 @@ class LLMClient:
 # Example usage
 # ---------------------------------------------------------------------------
 
-# OpenCode Go
-#
 # llm_client = LLMClient(
-#     "opencode-go",
-#     "...",
-#     "deepseek-v4-flash-free",
+#     "groq",
+#     "api-key",
+#     "openai/gpt-oss-20b",
 # )
 #
-# result = llm_client.generate("Hello, how are you?")
-
-
-# Override the model for a single call without affecting
-# the instance default.
-#
 # result = llm_client.generate(
-#     prompt="Fallback prompt",
-#     system="You are a helpful Python tutor.",
-#     developer="Always provide Python examples with type hints.",
-#     user="Explain Python decorators with an example.",
-#     assistant="A decorator is a function that modifies another function.",
-#     tool="The weather is 28°C and partly cloudy.",
+#     system_prompt="You are a helpful Python tutor.",
+#     user_prompt="Explain Python decorators with an example.",
 # )

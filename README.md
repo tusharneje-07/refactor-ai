@@ -32,13 +32,12 @@ uvicorn main:app --reload
 | POST | `/validate_project_path` | Validate a project path exists |
 | POST | `/refactor` | Trigger refactoring via an agent (validates `agent_id`) |
 | POST | `/accept_suggestion` | Accept or reject a suggestion and apply changes |
-| POST | `/_dev_coding_standards_agent` | Dev/test: run CodingStandardsAgent directly |
 | POST | `/_dev_flush_data` | Dev/test: flush all central DB data |
 | POST | `/_dev_flush_suggestion` | Dev/test: flush suggestions for a project |
 
 ## Model Config
 
-Agent config is defined in [`backend/model_config.json`](backend/model_config.json). Supported `agent_id`:
+Agent config is defined in [`backend/agent_config.json`](backend/agent_config.json). Supported `agent_id`:
 
 - `coding-standards-agent-01` — CodingStandardsAgent
 
